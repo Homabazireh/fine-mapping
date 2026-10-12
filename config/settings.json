@@ -1,0 +1,32 @@
+{
+  "paths": {
+    "vcf": "data/raw/full_LR-WGS.vcf.gz",
+    "gwas": "data/raw/EUR_diagram_t2d_1e-8.tsv",
+    "metadata": "data/raw/participant_categories.tsv",
+    "samples": "data/intermediate/samples.tsv",
+    "out": "results/cohort_categories",
+    "demo_data": "data/intermediate/demo",
+    "demo_results": "results/demo"
+  },
+  "analysis": {
+    "p_threshold": "1e-8",
+    "lead_gap": 150000,
+    "top_loci": 20,
+    "flank": 50000,
+    "max_markers": 8,
+    "min_dp": 10.0,
+    "min_gq": 20.0,
+    "min_call_rate": 0.9,
+    "min_mac": 2,
+    "max_indel_length": 49,
+    "allow_filter_dot": false,
+    "allow_subset": false,
+    "expected_per_group": null,
+    "test_associations": false,
+    "min_test_samples": 10,
+    "min_resolved_fraction": 0.8,
+    "min_carriers": 3,
+    "plot": false,
+    "max_plots": 10
+  }
+}

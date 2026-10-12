@@ -1,0 +1,18 @@
+---
+title: "Understanding the GWAS and haplotype analysis"
+subtitle: "Your data, participant groups, and what the figures mean"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    page-layout: article
+    link-external-newwindow: true
+    fig-cap-location: bottom
+    code-copy: true
+lang: en
+---
+
+<!-- Refresh the included content and figures with code/build_report.py. -->
+{{< include results/report_content.qmd >}}

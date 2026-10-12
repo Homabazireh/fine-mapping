@@ -1,0 +1,4 @@
+# The descriptive analysis itself uses only the Python >=3.10 standard library.
+# These packages enable optional association tests and plots.
+scipy>=1.10
+matplotlib>=3.6

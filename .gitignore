@@ -1,0 +1,49 @@
+# Python environments and caches
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.tools/
+.quarto/
+report.html
+report_files/
+
+# Local credentials and editor settings
+.env
+.env.*
+.vscode/
+*.pem
+*.key
+
+# Genomic input files, including files accidentally placed outside data/raw
+*.vcf
+*.vcf.gz
+*.bcf
+*.bam
+*.cram
+*.csi
+*.tbi
+*.bai
+*.crai
+
+# Local raw inputs and links; document their provenance in README.md.
+data/raw/*
+!data/raw/README.md
+
+# Derived metadata and review tables
+data/intermediate/*
+!data/intermediate/README.md
+!data/intermediate/.gitkeep
+
+# Generated analysis results and figures
+results/*
+!results/README.md
+!results/.gitkeep
+!results/figures/
+results/figures/*
+!results/figures/.gitkeep
+
+# Preserved imports and pre-organization snapshots
+archive/
+
+**/*.quarto_ipynb

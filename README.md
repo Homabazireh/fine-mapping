@@ -1,0 +1,125 @@
+# Fine mapping
+
+This project finds regions highlighted by a GWAS, reads nearby variants from
+your VCF, and compares local DNA patterns (**haplotypes**) between participant
+groups. A haplotype is a set of variant alleles carried together on one
+chromosome.
+
+## Start from a fresh checkout
+
+Use Python 3.10 or newer. Run these commands from the repository root:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python code/run_tests.py
+.venv/bin/python code/run_demo.py
+```
+
+The core tests and synthetic demo need no private inputs or third-party Python
+packages. Tests requiring local GWAS data or optional plotting packages are
+skipped when those inputs are unavailable. The demo creates generated inputs
+under `data/intermediate/demo/` and a completed run under `results/demo/`.
+
+The repository contains code, settings and report source. Raw data, participant
+tables, review files, analysis results, rendered reports, archived originals and
+local tool installations are ignored by Git and are **not included in a clone**.
+
+## Current local cohort status
+
+In the prepared analysis workspace, `results/report.html` contains figures and
+explanations for:
+
+- An overview of your real `EUR_diagram_t2d_1e-8.tsv` GWAS file.
+- Your authoritative participant categories: **T2D, Prediabetes and NORM**.
+- A short explanation of the participant labels that need checking.
+
+Your latest table is the authoritative category source: **49 T2D, 47
+Prediabetes and 51 NORM**. It supersedes the older ID lists. Eleven participant
+IDs still require confirmation before the full cohort comparison can run.
+
+An indexed check of the 20 default lead variants also found that none meets
+the current 90% genotype-completeness requirement. The highest is 126/147
+(85.71%). Missing genotypes remain missing; the report records this limitation.
+
+## Build figures and the report
+
+Supply the local GWAS and participant table at the paths in
+`config/settings.json`, or change those paths to your own files. The report
+builder always reads the configured GWAS, including when `--demo` is selected.
+Participant-category figures require the configured metadata table.
+
+Install Matplotlib and [Quarto](https://quarto.org/docs/download/index.html),
+then run:
+
+```bash
+.venv/bin/python -m pip install matplotlib
+.venv/bin/python code/build_report.py --render
+```
+
+This uses the configured cohort run when complete, plus the GWAS and
+authoritative participant table. While the VCF ID mapping is pending, the report
+shows the GWAS, category source and any saved genotype-completeness check. It
+saves `results/report.html` and a new folder under `results/figures/`.
+
+To include a synthetic example alongside the configured local GWAS:
+
+```bash
+.venv/bin/python code/run_demo.py
+.venv/bin/python code/build_report.py --demo --render
+```
+
+## Which files should I use?
+
+| File or folder | What it is for |
+| --- | --- |
+| `code/compare_haplotypes.py` | Main analysis: select regions, read genotypes, compare haplotypes |
+| `code/make_sample_template.py` | Prepare a participant table for checking |
+| `code/check_lead_genotypes.py` | Check genotype completeness at the selected GWAS leads |
+| `code/make_figures.py` | Draw the GWAS and haplotype figures |
+| `code/build_report.py` | Put explanations and figures into the report |
+| `code/run_demo.py` | Run the analysis on synthetic data |
+| `config/settings.json` | Change input paths and analysis settings |
+| `data/raw/` | Original GWAS, participant metadata and links to the VCF |
+| `data/intermediate/` | Participant checks and synthetic inputs |
+| `results/` | Analysis tables, figures and rendered report |
+| `report.qmd` | Quarto report title, layout and included content |
+| `docs/analysis.md` | Plain-language workflow and detailed commands |
+| `archive/` | Local earlier copies, including the old `(1)` files; not distributed |
+
+Open the scripts under **`code/`** for editing. In the original workspace,
+`data/raw/full_LR-WGS.vcf.gz` links to the VCF in the parent directory.
+On another machine, supply that input or set `paths.vcf` to its location.
+
+## Use the real participants
+
+In the prepared workspace, first check `sample_comparison.tsv` and
+`metadata_ids_not_in_vcf.tsv` under `data/intermediate/participant_review/`.
+These local review files are not distributed with the repository.
+Save verified assignments in `data/intermediate/samples.tsv` with columns
+`sample` and `group`. The [analysis guide](docs/analysis.md#participant-groups)
+explains how to prepare this table.
+
+After checking the groups and confirming both inputs use GRCh38:
+
+```bash
+.venv/bin/python code/compare_haplotypes.py \
+  --samples data/intermediate/samples.tsv \
+  --out results/cohort_run_01 \
+  --genome-build GRCh38
+
+.venv/bin/python code/build_report.py \
+  --run-dir results/cohort_run_01 --render
+```
+
+Choose a new output folder for each analysis. The configured GWAS cutoff is
+`P ≤ 1e-8`. Change defaults in `config/settings.json` or use command-line options.
+
+## Check the code
+
+```bash
+.venv/bin/python code/run_tests.py
+```
+
+Figures need Matplotlib; rendering needs Quarto. The original workspace has
+local installations, which are not distributed. See the
+[analysis guide](docs/analysis.md) for setup and optional statistical tests.

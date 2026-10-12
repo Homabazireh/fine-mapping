@@ -84,6 +84,7 @@ To include a synthetic example alongside the configured local GWAS:
 | `results/` | Analysis tables, figures and rendered report |
 | `report.qmd` | Quarto report title, layout and included content |
 | `docs/analysis.md` | Plain-language workflow and detailed commands |
+| [literature_review/](literature_review/) | Research papers, references and reading notes |
 | `archive/` | Local earlier copies, including the old `(1)` files; not distributed |
 
 Open the scripts under **`code/`** for editing. In the original workspace,

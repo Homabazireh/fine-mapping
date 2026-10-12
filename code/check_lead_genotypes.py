@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check genotype completeness at GWAS leads using the VCF index.
 
-This reads aggregate calls for every VCF sample. It uses no phenotype labels,
-does not assign haplotypes, and does not replace missing genotypes.
+This reads aggregate calls for every VCF sample. Optional metadata adds group
+counts for exact sample-ID matches. It does not assign haplotypes or replace
+missing genotypes.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from compare_haplotypes import (
     ALIASES, choose_leads, classify_variant, is_palindromic, parse_call,
     read_gwas, value_or_na, vcf_header, write_table,
 )
+from make_sample_template import read_metadata_groups
 from project_config import DEFAULT_CONFIG, PROJECT_ROOT, load_config, resolve_project_path
 
 
@@ -53,15 +55,15 @@ def record_counts(fields, n_samples, settings):
     return dict(
         raw_called_samples=sum(call.gt is not None for call in raw),
         high_quality_called_samples=called,
-        high_quality_call_rate=called / n_samples,
+        high_quality_call_rate=called / n_samples if n_samples else None,
         raw_reference_genotypes=sum(call.gt == (0, 0) for call in raw),
         high_quality_reference_genotypes=sum(call.gt == (0, 0) for call in quality),
         high_quality_exclusion_reasons=dict(Counter(call.reason for call in quality if call.gt is None)),
     )
 
 
-def inspect_lead(number, lead, records, n_samples, settings):
-    """Summarize an exact lead match without choosing a replacement variant."""
+def matching_records(lead, records, settings):
+    """Return exact allele matches, passing records, and a unique record to count."""
     matches = [fields for fields in records
                if {lead.ea, lead.oa} <= {fields[3], *fields[4].split(',')}]
     passing = [fields for fields in matches
@@ -69,9 +71,15 @@ def inspect_lead(number, lead, records, n_samples, settings):
                and classify_variant(fields[3], tuple(fields[4].split(',')), settings['max_indel_length'])]
     # Ambiguous matches have no single sample denominator; report counts as NA.
     selected = passing[0] if len(passing) == 1 else matches[0] if len(matches) == 1 else None
+    return matches, passing, selected
+
+
+def inspect_lead(number, lead, records, n_samples, settings):
+    """Summarize an exact lead match without choosing a replacement variant."""
+    matches, passing, selected = matching_records(lead, records, settings)
     counts = record_counts(selected, n_samples, settings) if selected is not None else {}
     call_rate = counts.get('high_quality_call_rate')
-    passes_call_rate = len(passing) == 1 and call_rate >= settings['min_call_rate']
+    passes_call_rate = len(passing) == 1 and call_rate is not None and call_rate >= settings['min_call_rate']
     if lead.liftover_strand == '-':
         status = 'negative_liftover_allele_orientation_unconfirmed'
     elif is_palindromic(lead):
@@ -101,7 +109,28 @@ def inspect_lead(number, lead, records, n_samples, settings):
     )
 
 
-def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT):
+def inspect_lead_groups(number, lead, records, group_indices, settings):
+    """Count each source category using only its exact VCF sample-ID matches."""
+    _, _, selected = matching_records(lead, records, settings)
+    rows = []
+    for group, indices in group_indices.items():
+        counts = {}
+        if selected is not None:
+            fields = selected[:9] + [selected[9 + index] for index in indices]
+            counts = record_counts(fields, len(indices), settings)
+        rows.append(dict(
+            locus_id=f'L{number:04d}', chrom=lead.chrom, lead_pos=lead.pos,
+            group=group, n_group=len(indices),
+            high_quality_called_samples=counts.get('high_quality_called_samples'),
+            high_quality_call_rate=counts.get('high_quality_call_rate'),
+            raw_called_samples=counts.get('raw_called_samples'),
+            raw_reference_genotypes=counts.get('raw_reference_genotypes'),
+            high_quality_reference_genotypes=counts.get('high_quality_reference_genotypes'),
+        ))
+    return rows
+
+
+def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT, metadata_path=None):
     """Query only selected lead positions and save aggregate QC with provenance."""
     executable = shutil.which('bcftools')
     if executable is None:
@@ -116,7 +145,17 @@ def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT):
         'gwas': input_info(settings['paths']['gwas'], include_hash=True),
         'config': input_info(resolve_project_path(config), include_hash=True),
     }
+    metadata = None
+    if metadata_path is not None:
+        inputs['metadata'] = input_info(metadata_path, include_hash=True)
+        metadata = read_metadata_groups(metadata_path)
     samples, contigs, reference_lines = vcf_header(inputs['vcf']['path'])
+    group_indices = {}
+    if metadata is not None:
+        group_indices = {group: [] for group in metadata.values()}
+        for index, sample in enumerate(samples):
+            if sample in metadata:
+                group_indices[metadata[sample]].append(index)
     gwas_args = SimpleNamespace(gwas=inputs['gwas']['path'], p_threshold=parameters['p_threshold'],
                                **{f'{name}_col': None for name in ALIASES})
     gwas, gwas_counts, columns = read_gwas(gwas_args, contigs)
@@ -135,6 +174,9 @@ def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT):
         records[fields[0], int(fields[1])].append(fields)
     rows = [inspect_lead(number, lead, records[lead.chrom, lead.pos], len(samples), parameters)
             for number, (lead, *_) in enumerate(chosen, 1)]
+    group_rows = [row for number, (lead, *_) in enumerate(chosen, 1)
+                  for row in inspect_lead_groups(number, lead, records[lead.chrom, lead.pos],
+                                                 group_indices, parameters)]
     stable = all((Path(info['path']).stat().st_size, Path(info['path']).stat().st_mtime_ns)
                  == (info['size_bytes'], info['mtime_ns']) for info in inputs.values())
     if not stable:
@@ -154,7 +196,7 @@ def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT):
         gwas_counts=gwas_counts, gwas_column_mapping=columns,
         bcftools_command=command, bcftools_stderr=query.stderr.strip(),
         inputs_stable_during_read=stable,
-        notes=['All VCF samples are counted without using or resolving phenotype labels.',
+        notes=['All-sample totals count every VCF sample independently of phenotype labels.',
                'Only exact lead positions were queried. Nearby marker panels and haplotypes were not analysed.',
                'Raw counts require valid diploid GTs but ignore DP, GQ and genotype FT.',
                'Missing genotypes remain missing. No reference-genotype or allele-orientation attestation was made.'],
@@ -162,6 +204,24 @@ def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT):
     out.mkdir(parents=True, exist_ok=True)
     write_table(out / 'lead_genotype_qc.tsv',
                 [{key: value_or_na(value) for key, value in row.items()} for row in rows], list(rows[0]))
+    if metadata is not None:
+        group_table = out / 'group_lead_genotype_qc.tsv'
+        group_fields = ['locus_id', 'chrom', 'lead_pos', 'group', 'n_group',
+                        'high_quality_called_samples', 'high_quality_call_rate', 'raw_called_samples',
+                        'raw_reference_genotypes', 'high_quality_reference_genotypes']
+        write_table(group_table, [{key: value_or_na(value) for key, value in row.items()}
+                                 for row in group_rows], group_fields)
+        matched_count = sum(len(indices) for indices in group_indices.values())
+        summary['group_qc'] = dict(
+            scope='exact_metadata_id_matches_only',
+            source_category_counts=dict(Counter(metadata.values())),
+            matched_category_counts={group: len(indices) for group, indices in group_indices.items()},
+            matched_sample_count=matched_count,
+            unmatched_vcf_count=len(samples) - matched_count,
+            unmatched_metadata_count=len(set(metadata) - set(samples)),
+            table=str(group_table.resolve()),
+        )
+        summary['notes'].append('Group QC uses exact metadata IDs only. Unmatched IDs are not assigned to any category; this is not a subset haplotype analysis.')
     (out / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print(f"Checked {summary['n_leads']} leads across {summary['n_samples']} samples. "
           f"Passing call rate: {summary['leads_passing_call_rate']}. Outputs: {out.resolve()}")
@@ -172,9 +232,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default=str(DEFAULT_CONFIG), help='Project settings JSON')
     parser.add_argument('--out', type=Path, default=DEFAULT_OUT, help='New or empty preflight output directory')
+    parser.add_argument('--metadata', type=Path, help='Optional category TSV for exact-ID group QC; aliases are not inferred')
     args = parser.parse_args(argv)
     try:
-        check_lead_genotypes(args.config, args.out)
+        check_lead_genotypes(args.config, args.out, metadata_path=args.metadata)
     except (OSError, ValueError, RuntimeError) as error:
         parser.error(str(error))
     return 0

@@ -23,6 +23,7 @@ import build_report as reports
 import compare_haplotypes as pipeline
 import make_demo
 import make_figures as figures
+from group_labels import display_group, ordered_groups
 
 
 class FiguresReportTests(unittest.TestCase):
@@ -49,6 +50,17 @@ class FiguresReportTests(unittest.TestCase):
             "demo_results": str(self.folder / "results" / "demo"),
             "demo_data": str(self.folder / "fixtures"),
         }}
+
+    def test_readable_names_do_not_pool_categories_or_relabel_non_diabetes(self):
+        source = {"NORM": 5, "Prediabetes": 3, "T2D": 4, "non_diabetes": 2}
+        original = dict(source)
+        keys = ordered_groups(source)
+        self.assertEqual(keys, ["T2D", "Prediabetes", "NORM", "non_diabetes"])
+        self.assertEqual([display_group(key) for key in keys],
+                         ["Diabetes", "Prediabetes", "Control", "non_diabetes"])
+        self.assertEqual([source[key] for key in keys], [4, 3, 5, 2])
+        self.assertEqual(source, original)
+        self.assertCountEqual(ordered_groups(["NORM", "Control"]), ["NORM", "Control"])
 
     def test_tiny_p_values_have_finite_correct_negative_log10(self):
         self.assertAlmostEqual(figures.neg_log10_p("3.35e-1003"), 1003 - math.log10(3.35), places=10)
@@ -90,6 +102,20 @@ class FiguresReportTests(unittest.TestCase):
         self.assertEqual(matrix["values"][h2][2], 1.0)
         self.assertTrue(math.isnan(matrix["values"][h1][3]))
         self.assertEqual(matrix["denominators"]["A"], 6)
+
+    def test_group_genotype_qc_uses_verified_denominators_and_preserves_missing(self):
+        rows = [
+            {"locus_id": "L1", "group": "T2D", "n_group": "4", "high_quality_called_samples": "3"},
+            {"locus_id": "L1", "group": "Prediabetes", "n_group": "2", "high_quality_called_samples": "0"},
+            {"locus_id": "L1", "group": "NORM", "n_group": "0", "high_quality_called_samples": "0"},
+            {"locus_id": "L2", "group": "T2D", "n_group": "4", "high_quality_called_samples": "NA"},
+        ]
+        matrix = figures.prepare_genotype_qc_matrix(rows, ["L1", "L2"], ["T2D", "Prediabetes", "NORM"])
+        self.assertEqual(matrix["values"][0][:2], [0.75, 0.0])
+        self.assertTrue(math.isnan(matrix["values"][0][2]))
+        self.assertTrue(all(math.isnan(value) for value in matrix["values"][1]))
+        self.assertEqual(matrix["counts"][0][:2], ["3/4", "0/2"])
+        self.assertEqual(matrix["groups"], ["T2D", "Prediabetes", "NORM"])
 
     def test_no_automatic_demo_fallback_and_missing_explicit_run_rejected(self):
         fixtures, _, _ = self.synthetic_run()
@@ -167,6 +193,7 @@ class FiguresReportTests(unittest.TestCase):
             "authoritative_group_source": True, "finalized_sample_table": False,
             "exact_id_matches": 136, "pending_vcf_id_matches": 11,
             "authoritative_category_counts": {"T2D": 49, "Prediabetes": 47, "NORM": 51},
+            "exact_match_category_counts": {"T2D": 46, "Prediabetes": 43, "NORM": 47},
             "comparison_counts": {"category_conflict": 88},
         }
         manifest = self.report_manifest()
@@ -174,12 +201,19 @@ class FiguresReportTests(unittest.TestCase):
             "id": "participant_category_counts", "scope": "participant_metadata",
             "title": "Supplied participant categories", "caption": "Source-table counts.",
             "png": str(self.folder / "categories.png"), "pdf": str(self.folder / "categories.pdf"),
+        }, {
+            "id": "lead_genotype_qc_by_group", "scope": "lead_genotype_qc",
+            "title": "Usable lead genotypes by group", "caption": "Exact metadata matches only.",
+            "png": str(self.folder / "genotype_qc.png"), "pdf": str(self.folder / "genotype_qc.pdf"),
         }]
         preflight = {
             "scope": "all_vcf_samples_no_phenotypes", "n_samples": 147, "n_leads": 20,
             "leads_passing_call_rate": 0, "max_high_quality_called": 126,
             "max_high_quality_call_rate": 126 / 147, "raw_reference_genotypes": 0,
             "parameters": {"min_dp": 10, "min_gq": 20, "min_call_rate": 0.9},
+            "group_qc": {"scope": "exact_metadata_id_matches_only", "matched_sample_count": 136,
+                         "unmatched_vcf_count": 11,
+                         "matched_category_counts": {"T2D": 46, "Prediabetes": 43, "NORM": 47}},
         }
         content = reports.report_content(manifest, review, None, False, preflight_summary=preflight)
         self.assertIn("authoritative group source", content)
@@ -191,12 +225,20 @@ class FiguresReportTests(unittest.TestCase):
         self.assertIn("without using participant group labels", content)
         self.assertIn("No checked lead met", content)
         self.assertIn("126 of 147 (85.7%)", content)
-        self.assertLess(content.index("Supplied participant categories"), content.index("Cohort figures are pending"))
+        self.assertLess(content.index("Supplied participant categories"), content.index("Cohort haplotype results are unavailable"))
         self.assertEqual(content.count("### Supplied participant categories"), 1)
         self.assertNotIn("Final cohort labels remain unresolved", content)
         self.assertNotIn("sample table is finalized", content)
-        for group, count in review["authoritative_category_counts"].items():
-            self.assertIn(f"| {group} | {count} |", content)
+        self.assertIn("| T2D | Diabetes | 49 | 46 | 3 |", content)
+        self.assertIn("| Prediabetes | Prediabetes | 47 | 43 | 4 |", content)
+        self.assertIn("| NORM | Control | 51 | 47 | 4 |", content)
+        self.assertNotIn("non_diabetes", content)
+        self.assertIn("| Diabetes | T2D | 46 |", content)
+        self.assertIn("| Prediabetes | Prediabetes | 43 |", content)
+        self.assertIn("| Control | NORM | 47 |", content)
+        self.assertIn("11 VCF samples remain unassigned", content)
+        self.assertIn("does not finalize an analysis subset", content)
+        self.assertEqual(content.count("### Usable lead genotypes by group"), 1)
 
     def test_run_with_no_haplotype_panels_reports_reasons_without_frequency_claims(self):
         output = self.folder / "cohort_run"
@@ -270,16 +312,64 @@ class FiguresReportTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("matplotlib"), "Optional matplotlib is not installed")
     def test_optional_export_writes_png_and_pdf_with_synthetic_scope(self):
         fixtures, output, _ = self.synthetic_run()
-        manifest = figures.build_figures(
-            gwas_path=fixtures / "gwas.tsv", out_dir=self.folder / "figures", run_dir=output,
-            synthetic=True, max_loci=1,
+        metadata = self.folder / "categories.tsv"
+        metadata.write_text(
+            "name (Tubingen ID)\tCategory\n"
+            "example_a\tNORM\nexample_b\tNORM\nexample_c\tNORM\n"
+            "example_d\tPrediabetes\nexample_e\tPrediabetes\nexample_f\tT2D\n"
         )
+        qc_table = self.folder / "group_lead_genotype_qc.tsv"
+        qc_table.write_text(
+            "locus_id\tgroup\tn_group\thigh_quality_called_samples\thigh_quality_call_rate\n"
+            "L1\tT2D\t1\t1\t1.0\nL1\tPrediabetes\t2\t1\t0.5\nL1\tNORM\t3\t0\t0.0\n"
+            "L2\tT2D\t1\t0\t0.0\nL2\tPrediabetes\t2\t2\t1.0\nL2\tNORM\t3\t3\t1.0\n"
+        )
+        preflight = self.folder / "preflight.json"
+        preflight.write_text(json.dumps({
+            "n_samples": 7, "n_leads": 2,
+            "parameters": {"min_dp": 10, "min_gq": 20, "min_call_rate": 0.9},
+            "inputs": {"metadata": {"path": str(metadata), "sha256": hashlib.sha256(metadata.read_bytes()).hexdigest()}},
+            "group_qc": {
+                "scope": "exact_metadata_id_matches_only", "table": str(qc_table),
+                "source_category_counts": {"T2D": 1, "Prediabetes": 2, "NORM": 3},
+                "matched_category_counts": {"T2D": 1, "Prediabetes": 2, "NORM": 3},
+                "matched_sample_count": 6, "unmatched_vcf_count": 1, "unmatched_metadata_count": 0,
+            },
+        }))
+        with mock.patch.object(figures, "_save", wraps=figures._save) as saved:
+            manifest = figures.build_figures(
+                gwas_path=fixtures / "gwas.tsv", out_dir=self.folder / "figures", run_dir=output,
+                synthetic=True, max_loci=1, metadata_path=metadata, preflight_path=preflight,
+            )
         self.assertGreater(len(manifest["figures"]), 0)
         self.assertTrue(any(figure["scope"] == "synthetic_demo" for figure in manifest["figures"]))
+        self.assertEqual(manifest["group_label_map"],
+                         {"T2D": "Diabetes", "Prediabetes": "Prediabetes", "NORM": "Control"})
+        self.assertEqual(manifest["counts"]["participant_category_counts"],
+                         {"NORM": 3, "Prediabetes": 2, "T2D": 1})
+        plot_calls = {call.args[3]: call.args[1] for call in saved.call_args_list}
+        for identifier, plot in plot_calls.items():
+            if identifier == "filtered_gwas_overview":
+                continue
+            self.assertEqual([tick.get_text() for tick in plot.axes[0].get_xticklabels()],
+                             ["Diabetes", "Prediabetes", "Control"])
+        category_axes = plot_calls["participant_category_counts"].axes[0]
+        self.assertEqual([bar.get_height() for bar in category_axes.patches], [1, 2, 3])
+        qc_axes = plot_calls["lead_genotype_qc_by_group"].axes[0]
+        self.assertEqual(qc_axes.images[0].get_array().tolist(), [[1.0, 0.5, 0.0], [0.0, 1.0, 1.0]])
+        qc_figure = next(item for item in manifest["figures"] if item["scope"] == "lead_genotype_qc")
+        self.assertNotIn("SYNTHETIC DEMO", qc_figure["title"])
         for figure in manifest["figures"]:
             with self.subTest(figure=figure["id"]):
                 self.assertTrue(Path(figure["png"]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
                 self.assertTrue(Path(figure["pdf"]).read_bytes().startswith(b"%PDF"))
+        # A different category source must not silently reuse old group QC.
+        metadata.write_text(metadata.read_text().replace("example_f\tT2D", "example_f\tNORM"))
+        with self.assertRaisesRegex(ValueError, "(?i)(metadata|category|checksum)"):
+            figures.build_figures(
+                gwas_path=fixtures / "gwas.tsv", out_dir=self.folder / "stale_figures",
+                metadata_path=metadata, preflight_path=preflight,
+            )
 
 
 if __name__ == "__main__":

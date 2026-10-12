@@ -7,12 +7,14 @@ from collections import Counter, defaultdict
 import csv
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 import math
 from pathlib import Path
 import re
 import sys
 
+from group_labels import display_group, ordered_groups
 from project_config import DEFAULT_CONFIG, PROJECT_ROOT, load_config
 
 
@@ -111,6 +113,32 @@ def prepare_haplotype_matrix(rows, locus_id, groups, max_haplotypes=24):
     }
 
 
+def prepare_genotype_qc_matrix(rows, loci, groups):
+    """Return usable lead-call fractions among exact-matched group members."""
+    cells = {}
+    for row in rows:
+        key = (row['locus_id'], row['group'])
+        if key in cells:
+            raise ValueError(f'Duplicate group genotype-QC row: {key}')
+        total = _count(row['n_group'])
+        called = row['high_quality_called_samples']
+        if called in (None, '', 'NA'):
+            cells[key] = (math.nan, 'NA')
+        else:
+            called = _count(called)
+            cells[key] = (ratio_or_na(called, total), f'{called}/{total}')
+    values, counts = [], []
+    for locus in loci:
+        locus_values, locus_counts = [], []
+        for group in groups:
+            fraction, label = cells.get((locus, group), (math.nan, 'NA'))
+            locus_values.append(fraction)
+            locus_counts.append(label)
+        values.append(locus_values)
+        counts.append(locus_counts)
+    return {'loci': list(loci), 'groups': list(groups), 'values': values, 'counts': counts}
+
+
 def _read_table(path, required):
     """Read one analysis table and check the columns used by its chart."""
     with Path(path).open(encoding='utf-8-sig', newline='') as handle:
@@ -173,6 +201,52 @@ def _load_run(run_dir):
     frequencies = _read_table(run_dir / filenames[2],
                               ['locus_id', 'haplotype_id', 'group', 'haplotype_copies', 'resolved_chromosomes'])
     return summary, leads, phase, frequencies
+
+
+def _load_preflight_qc(path, metadata_path=None):
+    """Load explicit group QC, checking that its category source is current."""
+    summary = json.loads(path.read_text())
+    if not isinstance(summary, dict):
+        raise ValueError('Preflight summary must be a JSON object')
+    group_qc = summary.get('group_qc')
+    if group_qc is None:
+        return summary, None, []  # Older preflights contain overall QC only.
+    if not isinstance(group_qc, dict) or group_qc.get('scope') != 'exact_metadata_id_matches_only':
+        raise ValueError('Group genotype QC must use exact metadata ID matches only')
+    if metadata_path is not None:
+        expected = summary.get('inputs', {}).get('metadata', {}).get('sha256')
+        actual = hashlib.sha256(metadata_path.read_bytes()).hexdigest()
+        if expected != actual:
+            raise ValueError('Preflight metadata SHA256 does not match the supplied participant metadata; '
+                             'rerun genotype QC with that category source')
+    matched_counts = group_qc.get('matched_category_counts')
+    source_counts = group_qc.get('source_category_counts')
+    if not isinstance(matched_counts, dict) or not isinstance(source_counts, dict):
+        raise ValueError('Group genotype QC needs matched and source category counts')
+    if sum(_count(count) for count in matched_counts.values()) != _count(group_qc.get('matched_sample_count', -1)):
+        raise ValueError('Group genotype-QC matched counts do not sum to matched_sample_count')
+    for group, count in matched_counts.items():
+        if group not in source_counts or _count(count) > _count(source_counts[group]):
+            raise ValueError('Group genotype-QC matched counts exceed the supplied category counts')
+    _count(group_qc.get('unmatched_vcf_count', -1))
+    if not {'min_dp', 'min_gq'} <= set(summary.get('parameters', {})):
+        raise ValueError('Group genotype QC must record its DP and GQ thresholds')
+    table = group_qc.get('table')
+    if not isinstance(table, str) or not table:
+        raise ValueError('Group genotype-QC summary needs its table path')
+    table_path = Path(table)
+    if not table_path.is_absolute():
+        table_path = path.parent / table_path
+    table_path = table_path.resolve()
+    rows = _read_table(table_path, ['locus_id', 'group', 'n_group', 'high_quality_called_samples'])
+    if not rows:
+        raise ValueError('Group genotype-QC table is empty')
+    for row in rows:
+        group = row['group']
+        expected_count = matched_counts.get(group, 0)
+        if group not in source_counts or _count(row['n_group']) != _count(expected_count):
+            raise ValueError('Group genotype-QC table denominator disagrees with matched category counts')
+    return summary, table_path, rows
 
 
 def _pyplot():
@@ -289,6 +363,18 @@ def _percentage_label(value):
     return f'{percent:.1f}'.rstrip('0').rstrip('.') + '%'
 
 
+def _group_label_note(groups):
+    """Explain display-only renames without changing the source group keys."""
+    renamed = []
+    for group in groups:
+        label = display_group(group)
+        if label != group:
+            renamed.append(f'{group} = {label}')
+    if not renamed:
+        return ''
+    return 'Display names: ' + '; '.join(renamed) + '. Source group assignments are unchanged.'
+
+
 def _matrix_figure(plt, matrix, row_labels, column_labels, *, title, subtitle, footer,
                    counts=None, synthetic=False):
     """Draw a percentage table, with a separate banner for simulated data."""
@@ -305,7 +391,8 @@ def _matrix_figure(plt, matrix, row_labels, column_labels, *, title, subtitle, f
     fig.text(0.065, subtitle_y, subtitle, fontsize=10, color='#526579', va='top', linespacing=1.4)
     cmap = plt.get_cmap('YlGnBu').with_extremes(bad='#e5e7eb')
     image = ax.imshow(matrix, cmap=cmap, vmin=0, vmax=1, aspect='auto')
-    ax.set_xticks(range(len(column_labels)), column_labels, rotation=15, ha='right')
+    display_labels = [display_group(group) for group in column_labels]
+    ax.set_xticks(range(len(column_labels)), display_labels, rotation=15, ha='right')
     ax.set_yticks(range(len(row_labels)), row_labels)
     ax.tick_params(length=0, labelsize=10, pad=7)
     for spine in ax.spines.values():
@@ -347,6 +434,9 @@ def _phase_figure(plt, data, total_loci, out, synthetic):
         'Participants with unresolved patterns remain in the denominator. '
         'Darker cells mean a higher resolved share; gray NA means no estimate. ' + selection
     )
+    label_note = _group_label_note(data['groups'])
+    if label_note:
+        caption += ' ' + label_note
     scope = 'synthetic_demo' if synthetic else 'cohort_run'
     return _save(plt, fig, out, 'phase_resolution', prefix + title, caption, scope)
 
@@ -365,7 +455,7 @@ def _haplotype_figure(plt, locus, data, out, synthetic):
     denominators = []
     for group in data['groups']:
         denominator = data['denominators'][group]
-        denominators.append(f'{group}: {denominator if denominator is not None else "NA"}')
+        denominators.append(f'{display_group(group)}: {denominator if denominator is not None else "NA"}')
     subtitle = ('Resolved chromosome copies (two per resolved participant):\n'
                 + '  ·  '.join(denominators))
     footer = (
@@ -386,6 +476,9 @@ def _haplotype_figure(plt, locus, data, out, synthetic):
         'Darker cells mean a more frequent pattern; 0% is an observed zero, while gray NA means no estimate. '
         + selection
     )
+    label_note = _group_label_note(data['groups'])
+    if label_note:
+        caption += ' ' + label_note
     safe_locus = re.sub(r'[^A-Za-z0-9_-]', '_', locus)
     scope = 'synthetic_demo' if synthetic else 'cohort_run'
     return _save(plt, fig, out, f'haplotype_frequencies_{safe_locus}', prefix + title, caption, scope)
@@ -393,18 +486,19 @@ def _haplotype_figure(plt, locus, data, out, synthetic):
 
 def _category_figure(plt, category_counts, out):
     """Show the supplied table's category counts, without implying VCF matching."""
-    preferred = ['T2D', 'Prediabetes', 'NORM']
-    groups = [group for group in preferred if group in category_counts]
-    groups.extend(sorted(set(category_counts) - set(preferred)))
+    groups = ordered_groups(category_counts)
+    labels = [display_group(group) for group in groups]
     counts = [category_counts[group] for group in groups]
     total = sum(counts)
     fig, ax = plt.subplots(figsize=(10, 5.5))
     fig.subplots_adjust(left=0.10, right=0.96, top=0.77, bottom=0.24)
     fig.text(0.10, 0.93, 'Participant categories from your table',
              fontsize=19, weight='bold', color='#172f46')
-    fig.text(0.10, 0.85, f'{total} participants · exact supplied Category labels',
+    fig.text(0.10, 0.85, f'{total} participants · counts from the supplied category table',
              fontsize=11, color='#526579')
-    bars = ax.bar(groups, counts, color=['#b76d38', '#219d98', '#285a88'], width=0.55)
+    positions = range(len(groups))
+    bars = ax.bar(positions, counts, color=['#b76d38', '#219d98', '#285a88'], width=0.55)
+    ax.set_xticks(positions, labels)
     ax.bar_label(bars, labels=[str(count) for count in counts], padding=5,
                  fontsize=13, weight='bold')
     ax.set_ylim(0, max(counts) * 1.22)
@@ -413,21 +507,71 @@ def _category_figure(plt, category_counts, out):
     ax.grid(axis='y', color='#e8edf2', linewidth=0.7)
     _style_axis(ax)
     ax.tick_params(axis='x', labelsize=12, pad=8)
-    fig.text(0.10, 0.12,
-             'These counts describe the category source, before matching names to the VCF.\n'
-             'They do not measure genotype completeness or haplotype frequencies.',
-             fontsize=10, color='#63758a', linespacing=1.5, va='top')
+    label_note = _group_label_note(groups)
+    footer = ('These counts describe the category source, before matching names to the VCF.\n'
+              'They do not measure genotype completeness or haplotype frequencies.')
+    if label_note:
+        footer = label_note + '\n' + footer
+    fig.text(0.10, 0.14, footer, fontsize=9, color='#63758a', linespacing=1.5, va='top')
     caption = ('Counts of unique participant IDs in the supplied Category table: '
-               + ', '.join(f'{group}: {category_counts[group]}' for group in groups)
-               + '. Category labels are preserved. These are source-table counts; '
+               + ', '.join(f'{display_group(group)}: {category_counts[group]}' for group in groups)
+               + '. These are source-table counts; '
                'they do not imply that every ID has been matched to the VCF or analysed.')
+    if label_note:
+        caption += ' ' + label_note
     return _save(plt, fig, out, 'participant_category_counts',
                  'Participant categories from your table', caption, 'participant_metadata')
 
 
+def _genotype_qc_figure(plt, data, summary, total_loci, out):
+    """Show lead-call completeness without presenting it as haplotype results."""
+    group_qc = summary['group_qc']
+    matched_counts = group_qc['matched_category_counts']
+    matched_samples = _count(group_qc['matched_sample_count'])
+    unmatched_samples = _count(group_qc['unmatched_vcf_count'])
+    thresholds = summary['parameters']
+    filter_labels = []
+    for parameter, name in [('min_dp', 'DP'), ('min_gq', 'GQ')]:
+        value = thresholds[parameter]
+        filter_labels.append(f'{name} ≥ {value:g}' if value else f'{name} filter off')
+    filters = ' · '.join(filter_labels)
+    denominators = ', '.join(
+        f'{display_group(group)}: {matched_counts.get(group, 0)}' for group in data['groups'])
+    source_counts = ', '.join(
+        f'{display_group(group)}: {group_qc["source_category_counts"][group]}'
+        for group in ordered_groups(group_qc['source_category_counts']))
+    selection = f'Showing {len(data["loci"])} of {total_loci} lead sites.'
+    footer = (
+        'Cells: usable calls / exact ID matches in the group. 0% = no usable calls; gray NA = no estimate.\n'
+        f'{matched_samples} exact-matched samples included; {unmatched_samples} unmatched VCF samples remain unassigned and are excluded.\n'
+        'Genotype quality control only; these are not haplotype frequencies. ' + selection
+    )
+    title = 'Usable lead genotypes by group'
+    fig = _matrix_figure(
+        plt, data['values'], data['loci'], data['groups'], title=title,
+        subtitle=filters + '\nDenominators (exact ID matches): ' + denominators,
+        footer=footer, counts=data['counts'],
+    )
+    caption = (
+        f'Genotype quality control at GWAS lead sites using {matched_samples} exact metadata–VCF ID matches. '
+        f'Denominators: {denominators}. Each cell is high_quality_called_samples / n_group, '
+        f'using the recorded genotype filters ({filters}). '
+        f'The {unmatched_samples} unmatched VCF sample IDs remain unassigned and are not plotted. '
+        f'The full source-table counts ({source_counts}) are not the plotting denominators. '
+        'Gray NA means the lead call could not be assessed or the group has no exact matches; '
+        '0% means an observed absence of usable calls among a positive denominator. '
+        'These are genotype-completeness counts, not haplotype frequencies or group association results. '
+        + selection
+    )
+    label_note = _group_label_note(data['groups'])
+    if label_note:
+        caption += ' ' + label_note
+    return _save(plt, fig, out, 'lead_genotype_qc_by_group', title, caption, 'lead_genotype_qc')
+
+
 def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_threshold='1e-8', max_loci=6,
-                  metadata_path=None):
-    """Plot the GWAS, an optional participant table, and an optional completed run."""
+                  metadata_path=None, preflight_path=None):
+    """Plot supplied sources, optional lead-call QC, and an optional completed run."""
     if type(max_loci) is not int or max_loci < 1:
         raise ValueError('max_loci must be a positive integer')
     try:
@@ -450,12 +594,21 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
         category_counts = dict(Counter(read_metadata_groups(metadata_path).values()))
         if not category_counts:
             raise ValueError('The participant category table is empty')
+    preflight_summary, preflight_table, preflight_rows = None, None, []
+    qc_data, qc_loci, qc_groups = None, [], []
+    if preflight_path is not None:
+        preflight_path = Path(preflight_path).resolve()
+        preflight_summary, preflight_table, preflight_rows = _load_preflight_qc(preflight_path, metadata_path)
+        if preflight_rows:
+            qc_groups = ordered_groups(preflight_summary['group_qc']['source_category_counts'])
+            qc_loci = list(dict.fromkeys(row['locus_id'] for row in preflight_rows))
+            qc_data = prepare_genotype_qc_matrix(preflight_rows, qc_loci[:40], qc_groups)
     if run_data is None:
         summary, leads, phase, frequencies = None, [], [], []
     else:
         summary, leads, phase, frequencies = run_data
     analysed = [row['locus_id'] for row in leads if row['status'] == 'analysed']
-    groups = list(summary['group_counts']) if summary is not None else []
+    groups = ordered_groups(summary['group_counts']) if summary is not None else []
     # Keep exported tables readable without changing any frequency denominator.
     phase_loci = analysed[:40]
     selected_loci = analysed[:max_loci]
@@ -473,6 +626,8 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
         figures.append(_overview(plt, points, counts, threshold, out))
         if category_counts is not None:
             figures.append(_category_figure(plt, category_counts, out))
+        if qc_data is not None:
+            figures.append(_genotype_qc_figure(plt, qc_data, preflight_summary, len(qc_loci), out))
         if phase_data is not None:
             figures.append(_phase_figure(plt, phase_data, len(analysed), out, synthetic))
         for locus, data in haplotype_data:
@@ -492,10 +647,20 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
         source_paths.append(metadata_path)
         counts['participant_category_counts'] = category_counts
         counts['participant_source_rows'] = sum(category_counts.values())
+    if preflight_path is not None:
+        source_paths.append(preflight_path)
+    if preflight_table is not None:
+        source_paths.append(preflight_table)
+        counts['lead_genotype_qc'] = {
+            'lead_sites': len(qc_loci), 'lead_sites_shown': len(qc_data['loci']),
+            'group_qc': preflight_summary['group_qc'],
+        }
     source_stats = {}
     for path in source_paths:
         stats = path.stat()
         source_stats[str(path)] = {'bytes': stats.st_size, 'mtime_ns': stats.st_mtime_ns}
+    observed_groups = list(dict.fromkeys(list(category_counts or {}) + groups + qc_groups))
+    group_label_map = {group: display_group(group) for group in ordered_groups(observed_groups)}
     manifest = {
         'schema_version': 1, 'created_at_utc': datetime.now(timezone.utc).isoformat(),
         'figures': figures,
@@ -503,9 +668,12 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
             'gwas': str(gwas_path), 'run_dir': str(selected_run) if selected_run else None,
             'run_files': run_files,
             'metadata': str(metadata_path) if metadata_path is not None else None,
+            'preflight_summary': str(preflight_path) if preflight_path is not None else None,
+            'group_lead_genotype_qc': str(preflight_table) if preflight_table is not None else None,
         },
         'source_stats': source_stats,
         'synthetic': bool(synthetic), 'p_threshold': str(threshold), 'max_loci': max_loci,
+        'group_label_map': group_label_map,
         'counts': counts, 'run_summary': summary,
     }
     (out / 'figure_manifest.json').write_text(json.dumps(manifest, indent=2, allow_nan=False) + '\n')
@@ -517,6 +685,7 @@ def main(argv=None):
     parser.add_argument('--config', default=str(DEFAULT_CONFIG))
     parser.add_argument('--gwas', help='Filtered GWAS TSV; default from project settings')
     parser.add_argument('--metadata', help='Optional participant Category TSV for source-count figures')
+    parser.add_argument('--preflight', help='Optional genotype-QC summary JSON for exact-match group call-rate figures')
     parser.add_argument('--run-dir', help='Explicit completed analysis directory; omitted means GWAS only')
     parser.add_argument('--synthetic', action='store_true', help='Label every run figure SYNTHETIC DEMO')
     parser.add_argument('--out', default=str(PROJECT_ROOT / 'results' / 'figures'), help='New or empty figure directory')
@@ -528,7 +697,8 @@ def main(argv=None):
         manifest = build_figures(gwas_path=args.gwas or settings['paths']['gwas'], out_dir=args.out,
                                  run_dir=args.run_dir, synthetic=args.synthetic,
                                  p_threshold=args.p_threshold or settings['analysis']['p_threshold'],
-                                 max_loci=args.max_loci, metadata_path=args.metadata)
+                                 max_loci=args.max_loci, metadata_path=args.metadata,
+                                 preflight_path=args.preflight)
     except (OSError, ValueError, RuntimeError, csv.Error) as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 2

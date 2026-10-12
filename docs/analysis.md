@@ -87,6 +87,12 @@ See [configuration notes](../config/README.md) for complete settings rules.
 
 Your authoritative table has **147 people: 51 NORM, 47 Prediabetes and 49
 T2D**. Its categories supersede the 88 differences in the older ID lists.
+
+Figures and report tables display `T2D` as **Diabetes**, `Prediabetes` as
+**Prediabetes**, and `NORM` as **Control**. Input category values are preserved.
+The report shows both the source category and display label, with the number of
+exact VCF matches and identifiers still awaiting confirmation for each group.
+
 There are **136 exact VCF matches** and **11 proposed aliases awaiting
 confirmation**. Review the remaining ID differences before the real run:
 
@@ -128,6 +134,7 @@ Reproduce this aggregate check, which does not need phenotype assignments:
 
 ```bash
 .venv/bin/python code/check_lead_genotypes.py \
+  --metadata data/raw/participant_categories.tsv \
   --out data/intermediate/cohort_preflight_repeat
 ```
 
@@ -138,6 +145,11 @@ checks are preserved.
 Resolving the participant IDs alone will therefore not produce haplotype
 estimates under the current settings. The VCF's genotype completeness needs
 investigation before interpreting group comparisons.
+
+With `--metadata`, the checker additionally reports lead-genotype completeness
+for exact VCF ID matches: 46 Diabetes, 43 Prediabetes and 47 Control. The 11
+unconfirmed identifiers remain unassigned. This grouping supports a QC figure;
+it does not finalize an analysis subset or calculate haplotype frequencies.
 
 ## Run the real comparison
 
@@ -169,6 +181,16 @@ and authoritative category source while cohort analysis is pending):
 .venv/bin/python code/build_report.py --render
 ```
 
+To use the fresh genotype check from the example above:
+
+```bash
+.venv/bin/python code/build_report.py \
+  --preflight data/intermediate/cohort_preflight_repeat/summary.json --render
+```
+
+Without `--preflight`, the builder uses the saved default completeness summary
+when present. A supplied missing summary is an error.
+
 Make a report from a completed real run:
 
 ```bash
@@ -181,7 +203,8 @@ Open `results/report.html`. Read the figures as follows:
 | Figure | How to read it |
 | --- | --- |
 | GWAS overview | Each dot is a supplied variant. Higher points have smaller P-values. The lower panel zooms in on the threshold. |
-| Participant categories | Counts from your authoritative table: T2D, Prediabetes and NORM. These are source counts, before VCF ID matching. |
+| Participant categories | Diabetes, Prediabetes and Control counts from the authoritative table; the source values are T2D, Prediabetes and NORM. These are totals before VCF ID matching. |
+| Lead-genotype completeness by group | Usable lead genotypes divided by exact VCF ID matches in each group. Unassigned IDs stay out of the group denominators; these are QC percentages, not haplotype frequencies. |
 | Participants with resolved haplotypes | Each cell shows people with usable haplotype pairs, out of their whole group. |
 | Haplotype frequencies | Each cell shows the fraction of resolved chromosome copies carrying that pattern. Zero means absent among resolved copies; `NA` means no estimate. |
 

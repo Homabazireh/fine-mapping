@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 
 from project_config import DEFAULT_CONFIG, PROJECT_ROOT, load_config, resolve_project_path
+from group_labels import display_group, ordered_groups
 
 
 RUN_TABLES = (
@@ -106,6 +107,11 @@ def _details(title, content):
 def _figure_guide(figure):
     """Explain the reading task for each plot type."""
     ident = figure['id']
+    if figure.get('scope') == 'lead_genotype_qc':
+        return ('Each row is a GWAS lead variant and each column is a group. Cells show '
+                'the share of exact ID matches with a genotype meeting the depth and quality '
+                'thresholds. The denominator is the matched participant count in that group. '
+                'These are genotype-completeness estimates, not haplotype frequencies.')
     if ident == 'participant_category_counts':
         return ('Each bar counts people in one category of the supplied participant table. '
                 'These are source-table counts; the people included in a completed genetic '
@@ -137,14 +143,16 @@ def _figure(figure):
             f'<a href="{html.escape(pdf, quote=True)}">Download PDF</a>\n')
 
 
-def _report_intro(run_dir, synthetic, summary=None):
+def _report_intro(run_dir, synthetic, summary=None, review=None, preflight=None):
     purpose = ('This project compares patterns of nearby DNA variants between participant '
                'groups. A **haplotype** is one such pattern on one chromosome. Public GWAS '
                'signals help choose which DNA regions to examine.')
     if synthetic:
-        status = ('**Real cohort analysis is pending.** The first figure uses real public '
-                  'GWAS data. The later figures are a **synthetic example** made from '
-                  'generated participants; they show how the analysis works.')
+        status = ('**Real cohort haplotype analysis is pending.** The first figure uses real public '
+                  'GWAS data. Only the haplotype and phase-resolution panels marked '
+                  '**SYNTHETIC DEMO** use generated participants. Participant-category '
+                  'and genotype-completeness figures, when present, use their separately '
+                  'recorded sources. The demo panels illustrate how the analysis works.')
     elif run_dir:
         analysed = (summary or {}).get('locus_status_counts', {}).get('analysed', 0)
         status = ('The first figure uses public GWAS data. The cohort section reports '
@@ -153,9 +161,19 @@ def _report_intro(run_dir, synthetic, summary=None):
             status += (' **No region yielded an analysable haplotype panel.** '
                        'The cohort section explains why.')
     else:
-        status = ('**Cohort analysis is pending.** This report shows the public GWAS data '
-                  'and the status of the participant labels. No synthetic results are '
-                  'substituted automatically.')
+        status = '**Cohort haplotype analysis is pending.** This report shows the public GWAS data.'
+        if (review or {}).get('authoritative_group_source'):
+            status += (' Participant categories are confirmed; the supplied group counts '
+                       'and exact VCF matches are shown below.')
+            pending = review.get('pending_vcf_id_matches', review.get('unmatched_metadata_ids'))
+            if pending:
+                status += f' **{_count_text(pending)} identifier matches still await confirmation.**'
+        else:
+            status += ' The participant-label review is summarized below.'
+        if preflight:
+            status += (' Real genotype-completeness checks describe the available calls; '
+                       'they do not calculate haplotype frequencies.')
+        status += ' **This report contains no synthetic demo panels.**'
     return f'## What this report shows\n\n{purpose}\n\n{status}'
 
 
@@ -189,7 +207,8 @@ def _participant_section(review, figures=()):
     excluded = review.get('excluded_vcf_count')
     if authoritative:
         status = ('**Your supplied participant table is the authoritative group source.** '
-                  'The category names are kept exactly as supplied.')
+                  'Source category values are preserved in the inputs; their report labels '
+                  'are shown alongside them below.')
         conflicts = review.get('comparison_counts', {}).get('category_conflict', 0)
         if conflicts:
             status += (f' The **{_count_text(conflicts)} historical group-label conflicts** '
@@ -224,8 +243,18 @@ def _participant_section(review, figures=()):
                        if authoritative or finalized else
                        'The supplied participant table lists the following groups. These '
                        'counts describe that source and are not verified analysis assignments.')
+        exact_counts = review.get('exact_match_category_counts', {})
+        coverage = []
+        for group in ordered_groups(supplied):
+            total, exact = supplied[group], exact_counts.get(group)
+            pending = total - exact if isinstance(total, int) and isinstance(exact, int) and 0 <= exact <= total else 'not reported'
+            coverage.append([group, display_group(group), total,
+                             exact if exact is not None else 'not reported', pending])
+        if coverage and all(isinstance(row[index], int) for row in coverage for index in (2, 3, 4)):
+            coverage.append(['Total', '', *[sum(row[index] for row in coverage) for index in (2, 3, 4)]])
         parts.extend([explanation,
-                      _table(['Group', 'People in supplied table'], sorted(supplied.items()))])
+                      _table(['Source category', 'Display group', 'People in table',
+                              'Exact VCF matches', 'Pending ID matches'], coverage)])
     return '\n\n'.join([*parts, *plots])
 
 
@@ -244,7 +273,7 @@ def _locus_status_table(statuses):
     ])
 
 
-def _preflight_section(preflight):
+def _preflight_section(preflight, figures=()):
     """Describe lead-site coverage without attributing it to phenotype groups."""
     if not preflight:
         return ''
@@ -279,8 +308,26 @@ def _preflight_section(preflight):
         parts.append('No reference-homozygote calls (`0/0` or `0|0`) were recorded at these '
                      'lead sites. Missing genotypes cannot be treated as reference calls; '
                      'the VCF generation and reference-call completeness need review.')
-    parts.append('This check does not calculate haplotype frequencies or compare participant groups. '
+    parts.append('This check does not calculate haplotype frequencies or test phenotype associations. '
                  'It checks lead sites only, using the thresholds shown above.')
+    group_qc = preflight.get('group_qc')
+    if group_qc:
+        matched_groups = group_qc.get('matched_category_counts', {})
+        matched_count = _count_text(group_qc.get('matched_sample_count', 'not reported'))
+        unassigned = _count_text(group_qc.get('unmatched_vcf_count', 'not reported'))
+        parts.extend([
+            '### Group completeness among exact ID matches',
+            f'The group-specific check uses **{matched_count} participants** whose supplied '
+            f'metadata IDs exactly match the VCF. **{unassigned} VCF samples remain unassigned.** '
+            'This QC-only grouping does not finalize an analysis subset or produce haplotype results.',
+            _table(['Display group', 'Source category', 'Exact matches used for QC'], [
+                [display_group(group), group, matched_groups[group]]
+                for group in ordered_groups(matched_groups)
+            ]),
+            'Each group percentage uses its exact-match count as the denominator. '
+            'The all-sample check above also includes the unassigned samples.',
+        ])
+        parts.extend(_figure(item) for item in figures if item['scope'] == 'lead_genotype_qc')
     if preflight.get('inputs_stable_during_read') is False:
         parts.append('The source files changed during the check. Repeat it before using these counts.')
     inputs = preflight.get('inputs', {})
@@ -308,9 +355,11 @@ def _uses_authoritative_sample_table(summary, review):
 def _run_section(manifest, run_dir, synthetic, review=None):
     summary = manifest.get('run_summary')
     if not run_dir or not summary:
-        return ('## Cohort figures are pending\n\n'
-                'No completed cohort run was selected. Figures require a completed analysis '
-                'using the participant assignments and coverage described above.')
+        return ('## Cohort haplotype results are unavailable\n\n'
+                'No completed cohort haplotype run was selected. Genotype-completeness checks '
+                'are shown separately above when available. Haplotype frequency estimates '
+                'require a completed analysis using the participant assignments and coverage '
+                'described above.')
     groups = summary.get('group_counts', {})
     participants = _count_text(sum(groups.values()))
     statuses = summary.get('locus_status_counts', {})
@@ -334,7 +383,9 @@ def _run_section(manifest, run_dir, synthetic, review=None):
                                 'has not been verified against its finalized sample table.')
         elif not (review or {}).get('finalized_sample_table'):
             explanation += ' See the participant-label review before interpreting these groups.'
-    parts = [heading, explanation, _table(['Run group', 'Participants'], groups.items())]
+    parts = [heading, explanation, _table(['Display group', 'Source group', 'Participants'], [
+        [display_group(group), group, groups[group]] for group in ordered_groups(groups)
+    ])]
     if not analysed:
         parts.append('**No haplotype frequency estimates were produced for this run.** '
                      'None of the selected regions met all requirements for a haplotype panel. '
@@ -373,7 +424,7 @@ def _workflow_section():
             ]))
 
 
-def _technical_section(manifest, review, run_dir, config):
+def _technical_section(manifest, review, run_dir, config, preflight_path=None):
     """Keep exact provenance and settings available without crowding the reading."""
     summary = manifest.get('run_summary') or {}
     counts = manifest.get('counts', {})
@@ -401,11 +452,16 @@ def _technical_section(manifest, review, run_dir, config):
              'min_dp', 'min_gq', 'min_call_rate')]))
         parts.append(_table(['Region status', 'Count'], summary.get('locus_status_counts', {}).items()))
     if review and review.get('existing_category_counts'):
+        counts_by_group = review['existing_category_counts']
         parts.extend(['Existing ID-list counts, retained for source comparison:',
-                      _table(['Group', 'People'], sorted(review['existing_category_counts'].items()))])
+                      _table(['Display group', 'Source category', 'People'], [
+                          [display_group(group), group, counts_by_group[group]]
+                          for group in ordered_groups(counts_by_group)
+                      ])])
     command = ('.venv/bin/python code/build_report.py'
                f' --config {shlex.quote(str(resolve_project_path(config)))}'
-               + (f' --run-dir {shlex.quote(str(run_dir))}' if run_dir else '') + ' --render')
+               + (f' --run-dir {shlex.quote(str(run_dir))}' if run_dir else '')
+               + (f' --preflight {shlex.quote(str(preflight_path))}' if preflight_path else '') + ' --render')
     parts.append('To recreate this report, run the following from the project root. '
                  'The command records the exact selected run.\n\n```bash\n' + command + '\n```')
     parts.append('Editable source: `report.qmd`. Generated text: `results/report_content.qmd`. '
@@ -414,16 +470,17 @@ def _technical_section(manifest, review, run_dir, config):
     return '## Files and reproducibility\n\n' + _details('Show source files, settings and command', '\n\n'.join(parts))
 
 
-def report_content(manifest, review_summary, run_dir, synthetic, config=DEFAULT_CONFIG, preflight_summary=None):
+def report_content(manifest, review_summary, run_dir, synthetic, config=DEFAULT_CONFIG,
+                   preflight_summary=None, preflight_path=None):
     """Assemble a plain-language report from counts, figures and saved reviews."""
     sections = [
-        _report_intro(run_dir, synthetic, manifest.get('run_summary')),
+        _report_intro(run_dir, synthetic, manifest.get('run_summary'), review_summary, preflight_summary),
         _public_gwas_section(manifest),
         _participant_section(review_summary, manifest.get('figures', [])),
-        _preflight_section(preflight_summary),
+        _preflight_section(preflight_summary, manifest.get('figures', [])),
         _run_section(manifest, run_dir, synthetic, review_summary),
         _workflow_section(),
-        _technical_section(manifest, review_summary, run_dir, config),
+        _technical_section(manifest, review_summary, run_dir, config, preflight_path),
     ]
     return '\n\n'.join(section for section in sections if section) + '\n'
 
@@ -450,10 +507,15 @@ def render_report():
     return target
 
 
-def build_report(config=DEFAULT_CONFIG, run_dir=None, demo=False, render=False, max_loci=6):
+def build_report(config=DEFAULT_CONFIG, run_dir=None, demo=False, render=False, max_loci=6, preflight=None):
     from make_figures import build_figures
     settings = load_config(config)
     selected, synthetic = select_run(settings, run_dir, demo)
+    preflight_path = (Path(preflight).expanduser().resolve() if preflight is not None else
+                      PROJECT_ROOT / 'data' / 'intermediate' / 'cohort_preflight' / 'summary.json')
+    if preflight is not None and not preflight_path.is_file():
+        raise ValueError(f'Genotype preflight summary does not exist: {preflight_path}')
+    preflight_summary = json.loads(preflight_path.read_text()) if preflight_path.is_file() else None
     output = PROJECT_ROOT / 'results'
     output.mkdir(exist_ok=True)
     figure_parent = output / 'figures' / ('demo' if synthetic else 'cohort' if selected else 'gwas')
@@ -463,18 +525,18 @@ def build_report(config=DEFAULT_CONFIG, run_dir=None, demo=False, render=False, 
     manifest = build_figures(gwas_path=settings['paths']['gwas'], out_dir=figure_dir,
                              run_dir=selected, synthetic=synthetic,
                              p_threshold=settings['analysis']['p_threshold'], max_loci=max_loci,
-                             metadata_path=metadata_path if metadata_path.is_file() else None)
+                             metadata_path=metadata_path if metadata_path.is_file() else None,
+                             preflight_path=preflight_path if preflight_summary and preflight_summary.get('group_qc') else None)
     review_path = PROJECT_ROOT / 'data' / 'intermediate' / 'participant_review' / 'summary.json'
     review = json.loads(review_path.read_text()) if review_path.is_file() else None
-    preflight_path = PROJECT_ROOT / 'data' / 'intermediate' / 'cohort_preflight' / 'summary.json'
-    preflight = json.loads(preflight_path.read_text()) if preflight_path.is_file() else None
     content = output / 'report_content.qmd'
-    content.write_text(report_content(manifest, review, selected, synthetic, config, preflight), encoding='utf-8')
+    content.write_text(report_content(manifest, review, selected, synthetic, config,
+                                      preflight_summary, preflight_path if preflight_summary else None), encoding='utf-8')
     context = dict(created_at_utc=datetime.now(timezone.utc).isoformat(),
                    config=str(config), run_dir=str(selected) if selected else None,
                    synthetic=synthetic, figure_manifest=str(figure_dir / 'figure_manifest.json'),
                    participant_review=str(review_path) if review else None,
-                   genotype_preflight=str(preflight_path) if preflight else None,
+                   genotype_preflight=str(preflight_path) if preflight_summary else None,
                    content=str(content), report_source=str(PROJECT_ROOT / 'report.qmd'))
     (output / 'report_context.json').write_text(json.dumps(context, indent=2) + '\n', encoding='utf-8')
     if render:
@@ -489,6 +551,8 @@ def main(argv=None):
     choice.add_argument('--run-dir', type=Path, help='Completed analysis directory; no fallback if missing')
     choice.add_argument('--demo', action='store_true', help='Use the latest completed synthetic demo explicitly')
     parser.add_argument('--max-loci', type=int, default=6, help='Maximum loci with detailed figures')
+    parser.add_argument('--preflight', type=Path,
+                        help='Use this genotype-completeness summary JSON instead of the saved default')
     parser.add_argument('--render', action='store_true', help='Render results/report.html with Quarto')
     args = parser.parse_args(argv)
     if args.max_loci < 1:

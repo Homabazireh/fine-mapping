@@ -47,3 +47,5 @@ results/figures/*
 archive/
 
 **/*.quarto_ipynb
+
+/.quarto/

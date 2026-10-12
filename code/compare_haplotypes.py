@@ -28,6 +28,7 @@ import sys
 from typing import TextIO
 
 from project_config import ConfigArgumentParser, DEFAULT_PATHS, resolve_project_path
+from group_labels import display_group, ordered_groups
 
 VERSION = "1.0.1"
 DEFAULT_GWAS = resolve_project_path(DEFAULT_PATHS['gwas'])
@@ -666,12 +667,13 @@ def plot_locus(locus, panel, assignments, samples, mapping, groups, out):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    groups = ordered_groups(groups)
     ordered = [sample for group in groups for sample in samples if mapping[sample] == group]
     matrix, labels = [], []
     for sample in ordered:
         pair, _, _ = assignments[sample]
         matrix.extend(pair if pair else ([float("nan")] * len(panel), [float("nan")] * len(panel)))
-        labels.append(f"{mapping[sample]} / {sample}")
+        labels.append(f"{display_group(mapping[sample])} / {sample}")
     array = np.array(matrix, dtype=float)
     fig, ax = plt.subplots(figsize=(max(9, len(panel) * 0.9), max(5, len(ordered) * 0.19)))
     maximum = max(len(marker.alts) for marker in panel)

@@ -2,7 +2,7 @@
   "paths": {
     "vcf": "data/raw/full_LR-WGS.vcf.gz",
     "gwas": "data/raw/EUR_diagram_t2d_1e-8.tsv",
-    "metadata": "data/raw/participant_categories.tsv",
+    "metadata": "data/raw/participant_groups_final.tsv",
     "samples": "data/intermediate/samples.tsv",
     "out": "results/cohort_categories",
     "demo_data": "data/intermediate/demo",

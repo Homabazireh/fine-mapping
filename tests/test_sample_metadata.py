@@ -71,6 +71,52 @@ class SampleMetadataTests(unittest.TestCase):
             {"donor_02": "T2D", "exact_sample": "NORM"},
         )
 
+    def test_final_table_schema_preserves_ids_and_group_labels(self):
+        path = self.table(
+            'final.tsv', [' External Name ', ' Diabetes_Group ', ' name '],
+            [['EXTERNAL_DEMO_001', 'Prediabetes', 'demoLRa001_01'],
+             ['EXTERNAL_DEMO_002', 'Diabetes', 'with_space '],
+             ['EXTERNAL_DEMO_003', 'Control', 'control']],
+        )
+        self.assertEqual(template.read_metadata_groups(path), {
+            'demoLRa001_01': 'Prediabetes', 'with_space ': 'Diabetes', 'control': 'Control',
+        })
+        self.assertEqual(template.metadata_groups(path, ['control', 'EXTERNAL_DEMO_001', 'with_space']),
+                         {'control': 'Control'})
+
+    def test_both_metadata_schemas_must_agree_exactly(self):
+        columns = ['name', 'Diabetes_Group', 'name (Tubingen ID)', 'Category']
+        valid = self.table('valid.tsv', columns, [['sample', 'Diabetes', 'sample', 'Diabetes']])
+        self.assertEqual(template.read_metadata_groups(valid), {'sample': 'Diabetes'})
+        for row in [['sample', 'Diabetes', 'other', 'Diabetes'],
+                    ['sample', 'Diabetes', 'sample', 'T2D'],
+                    ['sample', 'Diabetes', 'sample ', 'Diabetes']]:
+            with self.subTest(row=row):
+                path = self.table('invalid.tsv', columns, [row])
+                with self.assertRaisesRegex(ValueError, 'conflicting'):
+                    template.read_metadata_groups(path)
+
+    def test_incomplete_metadata_schema_is_rejected_even_without_rows(self):
+        for columns in [['name', 'Category'], ['External Name', 'Diabetes_Group']]:
+            with self.subTest(columns=columns):
+                with self.assertRaisesRegex(ValueError, 'missing metadata schema'):
+                    template.read_metadata_groups(self.table('invalid.tsv', columns, []))
+
+    def test_alias_status_must_confirm_the_match_when_present(self):
+        metadata = self.metadata([['source', 'Diabetes']])
+        for status in ['pending_user_confirmation', '', 'unverified']:
+            with self.subTest(status=status):
+                aliases = self.table('aliases.tsv', ['metadata_sample', 'vcf_sample', 'status'],
+                                     [['source', 'target', status]])
+                with self.assertRaisesRegex(ValueError, 'status must be confirmed or verified'):
+                    template.metadata_groups(metadata, ['target'], aliases)
+        for status in ['confirmed', 'Verified', ' confirmed ']:
+            with self.subTest(status=status):
+                aliases = self.table('aliases.tsv', ['metadata_sample', 'vcf_sample', 'status'],
+                                     [['source', 'target', status]])
+                self.assertEqual(template.metadata_groups(metadata, ['target'], aliases),
+                                 {'target': 'Diabetes'})
+
     def test_duplicate_or_empty_metadata_is_rejected(self):
         invalid_rows = {
             "conflicting duplicate": [["donor", "NORM"], ["donor", "T2D"]],

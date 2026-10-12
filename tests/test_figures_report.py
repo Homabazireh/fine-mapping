@@ -8,6 +8,7 @@ import io
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -254,6 +255,91 @@ class FiguresReportTests(unittest.TestCase):
         self.assertNotIn("Read completeness first, then compare patterns", content)
         self.assertNotIn("Synthetic example", content)
 
+    def test_verified_alias_coverage_is_reported_separately_and_not_left_pending(self):
+        counts = {"T2D": 49, "Prediabetes": 48, "Control": 50}
+        exact = {"T2D": 46, "Prediabetes": 45, "Control": 45}
+        aliases = {"T2D": 3, "Prediabetes": 3, "Control": 5}
+        review = {
+            "authoritative_group_source": True, "finalized_sample_table": True,
+            "metadata_group_column": "Diabetes_Group", "pending_vcf_id_matches": 0,
+            "previous_category_change_count": 92, "category_label_only_change_count": 20,
+            "authoritative_category_counts": counts, "exact_match_category_counts": exact,
+            "verified_alias_category_counts": aliases, "matched_category_counts": counts,
+        }
+        manifest = self.report_manifest()
+        manifest["figures"] = [{
+            "id": "lead_genotype_qc_by_group", "scope": "lead_genotype_qc",
+            "title": "Usable lead genotypes by group", "caption": "Exact and verified ID matches.",
+            "png": str(self.folder / "genotype_qc.png"), "pdf": str(self.folder / "genotype_qc.pdf"),
+        }]
+        preflight = {
+            "n_samples": 147, "n_leads": 20,
+            "group_qc": {
+                "scope": "exact_and_verified_id_matches", "matched_sample_count": 147,
+                "exact_match_sample_count": 136, "verified_alias_sample_count": 11,
+                "unmatched_vcf_count": 0, "matched_category_counts": counts,
+            },
+        }
+        content = reports.report_content(manifest, review, None, False, preflight_summary=preflight)
+        self.assertIn("`Diabetes_Group` column", content)
+        self.assertIn("92 participant group assignments changed", content)
+        self.assertIn("20 category labels changed in name only", content)
+        self.assertIn("Exact VCF matches | Verified alias matches | Pending ID matches", content)
+        self.assertIn("| T2D | Diabetes | 49 | 46 | 3 | 0 |", content)
+        self.assertIn("| Prediabetes | Prediabetes | 48 | 45 | 3 | 0 |", content)
+        self.assertIn("| Control | Control | 50 | 45 | 5 | 0 |", content)
+        self.assertIn("| Total |  | 147 | 136 | 11 | 0 |", content)
+        self.assertIn("136 exact metadata–VCF ID matches", content)
+        self.assertIn("11 verified alias matches", content)
+        self.assertIn("combined exact and verified alias count", content)
+        self.assertIn("share of matched participants", content)
+        self.assertNotIn("identifier matches still await confirmation", content)
+        self.assertNotIn("metadata IDs exactly match the VCF", content)
+        self.assertNotIn("share of exact ID matches", content)
+
+        review["matched_category_counts"] = {**counts, "T2D": 48}
+        with self.assertRaisesRegex(ValueError, "disagrees with exact and verified alias counts"):
+            reports._participant_section(review)
+
+    def test_cohort_overview_is_shown_without_haplotypes_or_saved_preflight(self):
+        output = self.folder / "cohort_no_preflight"
+        summary = {
+            "group_counts": {"T2D": 49, "Prediabetes": 48, "Control": 50},
+            "selected_loci": 20,
+            "locus_status_counts": {"lead_below_min_call_rate": 19,
+                                    "palindromic_lead_orientation_unconfirmed": 1},
+            "haplotype_carrier_tests_performed": 0,
+            "scan_counts": {"high_quality_homozygous_reference_genotypes": 0},
+        }
+        manifest = self.report_manifest(output, summary)
+        manifest["figures"] = [{
+            "id": "cohort_comparison_overview", "scope": "cohort_run",
+            "title": "Cohort comparison overview", "caption": "Observed genotypes from saved run tables.",
+            "png": str(output / "figures/overview.png"), "pdf": str(output / "figures/overview.pdf"),
+        }, {
+            "id": "regional_marker_comparison", "scope": "cohort_run",
+            "title": "Regional marker comparison", "caption": "Separate SNPs at physical positions.",
+            "png": str(output / "figures/regional.png"), "pdf": str(output / "figures/regional.pdf"),
+        }]
+        content = reports.report_content(manifest, None, output, False,
+                                         no_preflight=True, output_dir=output)
+        self.assertEqual(content.count("### Cohort comparison overview"), 1)
+        self.assertEqual(content.count("### Regional marker comparison"), 1)
+        self.assertLess(content.index("No haplotype frequency estimates were produced"),
+                        content.index("### Cohort comparison overview"))
+        self.assertIn("single-variant summaries, not phased chromosome patterns", content)
+        self.assertIn("conditional on observed genotypes", content)
+        self.assertIn("no high-quality homozygous-reference (`0/0`) calls", content)
+        self.assertIn("ALT allele copies divided by observed chromosome copies", content)
+        self.assertIn("No estimate is drawn when its denominator is zero", content)
+        self.assertIn("https://www.nature.com/articles/s41588-024-01719-5/figures/1", content)
+        self.assertIn("regional variant tables saved by this completed run", content)
+        self.assertIn("does not load or rerun a separate VCF precheck", content)
+        self.assertIn("No haplotype association tests were run", content)
+        self.assertIn("--no-preflight", content)
+        self.assertIn("(<figures/overview.png>)", content)
+        self.assertNotIn("Lead-genotype completeness check", content)
+
     def test_authoritative_run_claim_requires_matching_saved_sample_table_hash(self):
         fixtures, output, summary = self.synthetic_run()
         supplied = self.folder / "new_authoritative_samples.tsv"
@@ -309,6 +395,85 @@ class FiguresReportTests(unittest.TestCase):
         self.assertEqual(figure_sentinel.read_bytes(), b"existing figure")
         self.assertFalse(rendered_dirs[0].exists())
 
+    def test_preflight_and_no_preflight_are_mutually_exclusive(self):
+        with mock.patch.object(reports, "load_config") as loader:
+            with self.assertRaisesRegex(ValueError, "Choose --preflight or --no-preflight"):
+                reports.build_report(preflight=self.folder / "check.json", no_preflight=True)
+        loader.assert_not_called()
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                reports.main(["--preflight", "check.json", "--no-preflight"])
+        self.assertEqual(error.exception.code, 2)
+
+    @unittest.skipUnless(importlib.util.find_spec("matplotlib"), "Optional matplotlib is not installed")
+    def test_custom_report_skips_saved_preflight_and_preserves_default_and_analysis_files(self):
+        fixtures, original_output, _ = self.synthetic_run()
+        output = self.folder / "custom report and analysis"
+        original_output.rename(output)
+        analysis_files = {path: path.read_bytes() for path in output.iterdir() if path.is_file()}
+        source = self.folder / "report.qmd"
+        source.write_text((ROOT / "report.qmd").read_text())
+        config = self.folder / "settings.json"
+        metadata = fixtures / "participant_groups.tsv"
+        metadata.write_text((fixtures / "samples.tsv").read_text().replace("sample\tgroup\n", "name\tDiabetes_Group\n", 1))
+        settings = self.settings()
+        settings["paths"].update({"gwas": str(fixtures / "gwas.tsv"),
+                                  "metadata": str(metadata)})
+        config.write_text(json.dumps(settings))
+        defaults = {source: source.read_bytes(), config: config.read_bytes()}
+        for name in ["report.html", "report_content.qmd", "report_context.json", "figures/keep.txt"]:
+            path = self.folder / "results" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Existing default artifact: " + name)
+            defaults[path] = path.read_bytes()
+        prior_check = self.folder / "data/intermediate/cohort_preflight/summary.json"
+        prior_check.parent.mkdir(parents=True)
+        prior_check.write_text("Invalid old JSON must never be read when preflight is disabled")
+        rendered_dirs = []
+
+        def fake_quarto(command, *, cwd, check):
+            self.assertEqual(Path(cwd), output)
+            self.assertTrue(check)
+            self.assertEqual(command[2], "report.qmd")
+            self.assertIn("{{< include report_content.qmd >}}", (output / "report.qmd").read_text())
+            content = (output / "report_content.qmd").read_text()
+            images = re.findall(r'\]\(<([^>]+)>\)', content)
+            downloads = re.findall(r'href="([^"]+\.pdf)"', content)
+            self.assertTrue(images)
+            self.assertEqual(len(images), len(downloads))
+            for relative in images + downloads:
+                self.assertTrue(relative.startswith("figures/"), relative)
+                self.assertTrue((output / relative).is_file(), relative)
+            self.assertNotIn("Lead-genotype completeness check", content)
+            self.assertIn("--no-preflight", content)
+            self.assertIn("--output-dir", content)
+            self.assertIn(str(output), content)
+            staging = Path(command[command.index("--output-dir") + 1])
+            self.assertFalse(staging.is_relative_to(output))
+            rendered_dirs.append(staging)
+            shutil.rmtree(staging)
+            staging.mkdir()
+            (staging / "report.html").write_text("<!doctype html><html>Custom rendered report</html>")
+
+        with mock.patch.object(reports, "PROJECT_ROOT", self.folder), \
+                mock.patch.object(reports.shutil, "which", return_value="/fake/quarto"), \
+                mock.patch.object(reports.subprocess, "run", side_effect=fake_quarto), \
+                mock.patch.object(figures, "build_figures", wraps=figures.build_figures) as builder:
+            context = reports.build_report(config=config, run_dir=output, no_preflight=True,
+                                           output_dir=output, render=True)
+        self.assertIsNone(builder.call_args.kwargs["preflight_path"])
+        self.assertIsNone(context["genotype_preflight"])
+        self.assertTrue(context["preflight_disabled"])
+        self.assertEqual(context["report_source"], str(output / "report.qmd"))
+        self.assertEqual(context["html"], str(output / "report.html"))
+        stored_context = json.loads((output / "report_context.json").read_text())
+        self.assertTrue(stored_context["preflight_disabled"])
+        manifest = json.loads(Path(context["figure_manifest"]).read_text())
+        self.assertNotIn("lead_genotype_qc", {figure["scope"] for figure in manifest["figures"]})
+        for path, expected in {**defaults, **analysis_files}.items():
+            self.assertEqual(path.read_bytes(), expected, str(path))
+        self.assertFalse(rendered_dirs[0].exists())
+
     @unittest.skipUnless(importlib.util.find_spec("matplotlib"), "Optional matplotlib is not installed")
     def test_optional_export_writes_png_and_pdf_with_synthetic_scope(self):
         fixtures, output, _ = self.synthetic_run()
@@ -348,17 +513,35 @@ class FiguresReportTests(unittest.TestCase):
         self.assertEqual(manifest["counts"]["participant_category_counts"],
                          {"NORM": 3, "Prediabetes": 2, "T2D": 1})
         plot_calls = {call.args[3]: call.args[1] for call in saved.call_args_list}
+        group_labels = ["Diabetes", "Prediabetes", "Control"]
         for identifier, plot in plot_calls.items():
-            if identifier == "filtered_gwas_overview":
-                continue
-            self.assertEqual([tick.get_text() for tick in plot.axes[0].get_xticklabels()],
-                             ["Diabetes", "Prediabetes", "Control"])
+            if (identifier in {"participant_category_counts", "lead_genotype_qc_by_group", "phase_resolution"}
+                    or identifier.startswith("haplotype_frequencies_")):
+                self.assertEqual([tick.get_text() for tick in plot.axes[0].get_xticklabels()], group_labels)
         category_axes = plot_calls["participant_category_counts"].axes[0]
         self.assertEqual([bar.get_height() for bar in category_axes.patches], [1, 2, 3])
         qc_axes = plot_calls["lead_genotype_qc_by_group"].axes[0]
         self.assertEqual(qc_axes.images[0].get_array().tolist(), [[1.0, 0.5, 0.0], [0.0, 1.0, 1.0]])
         qc_figure = next(item for item in manifest["figures"] if item["scope"] == "lead_genotype_qc")
         self.assertNotIn("SYNTHETIC DEMO", qc_figure["title"])
+        # The new layouts place group labels on the count panel and regional rows.
+        # They must describe the synthetic run's four people per group, rather
+        # than reuse the separately supplied metadata's source-table counts.
+        overview = plot_calls["cohort_comparison_overview"]
+        self.assertEqual([tick.get_text() for tick in overview.axes[1].get_xticklabels()], group_labels)
+        self.assertEqual([bar.get_height() for bar in overview.axes[1].patches], [4, 4, 4])
+        self.assertEqual([label.get_text() for label in overview.axes[2].get_legend().get_texts()],
+                         [*group_labels, "All participants"])
+        regional = plot_calls["regional_marker_comparison"]
+        self.assertEqual([axis.get_ylabel() for axis in regional.axes[::2]],
+                         [f"{group}\nn = 4\nPercent" for group in group_labels])
+        for identifier in ["cohort_comparison_overview", "regional_marker_comparison"]:
+            item = next(figure for figure in manifest["figures"] if figure["id"] == identifier)
+            self.assertEqual(item["scope"], "synthetic_demo")
+            self.assertTrue(item["title"].startswith("SYNTHETIC DEMO"))
+            self.assertTrue(item["caption"].startswith("SYNTHETIC DEMO"))
+            self.assertTrue(any(text.get_text().startswith("SYNTHETIC DEMO")
+                                for text in plot_calls[identifier].texts))
         for figure in manifest["figures"]:
             with self.subTest(figure=figure["id"]):
                 self.assertTrue(Path(figure["png"]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))

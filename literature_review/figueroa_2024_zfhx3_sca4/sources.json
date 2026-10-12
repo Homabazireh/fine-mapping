@@ -1,0 +1,86 @@
+{
+  "accessed_utc": "2026-10-12T17:52:14.216981+00:00",
+  "paper_url": "https://www.nature.com/articles/s41588-024-01719-5",
+  "doi": "10.1038/s41588-024-01719-5",
+  "downloads": [
+    {
+      "file": "supplementary_information.pdf",
+      "url": "https://media.springernature.com/original/springer-static/esm/art%3A10.1038%2Fs41588-024-01719-5/MediaObjects/41588_2024_1719_MOESM1_ESM.pdf",
+      "bytes": 14622222,
+      "sha256": "186dc0a5e6721f85353b143dcb3f6cb828e2889e0ef1efb1713144e3d7329a59"
+    }
+  ],
+  "main_article_pdf_saved": false,
+  "reviewed_date": "2026-10-12",
+  "figure_1_url": "https://www.nature.com/articles/s41588-024-01719-5/figures/1",
+  "pubmed_url": "https://pubmed.ncbi.nlm.nih.gov/38684900/",
+  "study_code_url": "https://github.com/imgag/sca4_project",
+  "study_code_commit": "876195701730e4daca1cc5bdd380ccbaf2698380",
+  "review_evidence": [
+    "Publisher public abstract and citation metadata",
+    "Publisher public Figure 1 caption, especially panel d",
+    "Study code at the recorded revision: rules/phasing.smk, rules/merge_variants.smk, rules/trgt.smk",
+    "Local code/compare_haplotypes.py and results/cohort_no_preflight outputs"
+  ],
+  "main_article_access": "Public subscription preview; no full article PDF saved",
+  "supplement_downloaded": true,
+  "local_run_completed_at_utc": "2026-10-12T17:33:17.719574+00:00",
+  "citation_metadata": {
+    "citation_title": [
+      "A GGC-repeat expansion in ZFHX3 encoding polyglycine causes spinocerebellar ataxia type 4 and impairs autophagy"
+    ],
+    "citation_volume": [
+      "56"
+    ],
+    "citation_issue": [
+      "6"
+    ],
+    "citation_publication_date": [
+      "2024/06"
+    ],
+    "citation_online_date": [
+      "2024/04/29"
+    ],
+    "citation_firstpage": [
+      "1080"
+    ],
+    "citation_lastpage": [
+      "1089"
+    ],
+    "citation_doi": [
+      "10.1038/s41588-024-01719-5"
+    ],
+    "citation_author": [
+      "Figueroa, Karla P.",
+      "Gross, Caspar",
+      "Buena-Atienza, Elena",
+      "Paul, Sharan",
+      "Gandelman, Mandi",
+      "Kakar, Naseebullah",
+      "Sturm, Marc",
+      "Casadei, Nicolas",
+      "Admard, Jakob",
+      "Park, Joohyun",
+      "Zühlke, Christine",
+      "Hellenbroich, Yorck",
+      "Pozojevic, Jelena",
+      "Balachandran, Saranya",
+      "Händler, Kristian",
+      "Zittel, Simone",
+      "Timmann, Dagmar",
+      "Erdlenbruch, Friedrich",
+      "Herrmann, Laura",
+      "Feindt, Thomas",
+      "Zenker, Martin",
+      "Klopstock, Thomas",
+      "Dufke, Claudia",
+      "Scoles, Daniel R.",
+      "Koeppen, Arnulf",
+      "Spielmann, Malte",
+      "Riess, Olaf",
+      "Ossowski, Stephan",
+      "Haack, Tobias B.",
+      "Pulst, Stefan M."
+    ]
+  }
+}

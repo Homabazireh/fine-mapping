@@ -211,8 +211,9 @@ def _load_preflight_qc(path, metadata_path=None):
     group_qc = summary.get('group_qc')
     if group_qc is None:
         return summary, None, []  # Older preflights contain overall QC only.
-    if not isinstance(group_qc, dict) or group_qc.get('scope') != 'exact_metadata_id_matches_only':
-        raise ValueError('Group genotype QC must use exact metadata ID matches only')
+    scopes = {'exact_metadata_id_matches_only', 'exact_and_verified_id_matches'}
+    if not isinstance(group_qc, dict) or group_qc.get('scope') not in scopes:
+        raise ValueError('Group genotype QC must use exact or explicitly verified metadata ID matches')
     if metadata_path is not None:
         expected = summary.get('inputs', {}).get('metadata', {}).get('sha256')
         actual = hashlib.sha256(metadata_path.read_bytes()).hexdigest()
@@ -228,6 +229,22 @@ def _load_preflight_qc(path, metadata_path=None):
     for group, count in matched_counts.items():
         if group not in source_counts or _count(count) > _count(source_counts[group]):
             raise ValueError('Group genotype-QC matched counts exceed the supplied category counts')
+    if group_qc['scope'] == 'exact_and_verified_id_matches':
+        aliases = summary.get('inputs', {}).get('id_map', {})
+        alias_path = Path(aliases.get('path', ''))
+        if not alias_path.is_file() or aliases.get('sha256') != hashlib.sha256(alias_path.read_bytes()).hexdigest():
+            raise ValueError('Verified ID-map SHA256 does not match the saved aliases; rerun genotype QC')
+        exact_counts = group_qc.get('exact_match_category_counts', {})
+        alias_counts = group_qc.get('verified_alias_category_counts', {})
+        if set(exact_counts) != set(source_counts) or set(alias_counts) != set(source_counts):
+            raise ValueError('Verified group QC needs exact and alias counts for every source category')
+        for group in source_counts:
+            if _count(exact_counts[group]) + _count(alias_counts[group]) != _count(matched_counts.get(group, 0)):
+                raise ValueError('Group genotype-QC exact and alias counts disagree with matched counts')
+        for counts, field in [(exact_counts, 'exact_match_sample_count'),
+                              (alias_counts, 'verified_alias_sample_count')]:
+            if sum(_count(value) for value in counts.values()) != _count(group_qc.get(field, -1)):
+                raise ValueError('Group genotype-QC exact or alias total is inconsistent')
     _count(group_qc.get('unmatched_vcf_count', -1))
     if not {'min_dp', 'min_gq'} <= set(summary.get('parameters', {})):
         raise ValueError('Group genotype QC must record its DP and GQ thresholds')
@@ -513,7 +530,7 @@ def _category_figure(plt, category_counts, out):
     if label_note:
         footer = label_note + '\n' + footer
     fig.text(0.10, 0.14, footer, fontsize=9, color='#63758a', linespacing=1.5, va='top')
-    caption = ('Counts of unique participant IDs in the supplied Category table: '
+    caption = ('Counts of unique participant IDs in the supplied participant table: '
                + ', '.join(f'{display_group(group)}: {category_counts[group]}' for group in groups)
                + '. These are source-table counts; '
                'they do not imply that every ID has been matched to the VCF or analysed.')
@@ -541,28 +558,38 @@ def _genotype_qc_figure(plt, data, summary, total_loci, out):
         f'{display_group(group)}: {group_qc["source_category_counts"][group]}'
         for group in ordered_groups(group_qc['source_category_counts']))
     selection = f'Showing {len(data["loci"])} of {total_loci} lead sites.'
+    with_aliases = group_qc['scope'] == 'exact_and_verified_id_matches'
+    match_label = 'exact or verified ID matches' if with_aliases else 'exact ID matches'
+    membership = (f'{matched_samples} matched samples included '
+                  f'({group_qc["exact_match_sample_count"]} exact + '
+                  f'{group_qc["verified_alias_sample_count"]} verified aliases)'
+                  if with_aliases else f'{matched_samples} exact-matched samples included')
     footer = (
-        'Cells: usable calls / exact ID matches in the group. 0% = no usable calls; gray NA = no estimate.\n'
-        f'{matched_samples} exact-matched samples included; {unmatched_samples} unmatched VCF samples remain unassigned and are excluded.\n'
+        f'Cells: usable calls / {match_label} in the group. 0% = no usable calls; gray NA = no estimate.\n'
+        f'{membership}; {unmatched_samples} unmatched VCF samples excluded.\n'
         'Genotype quality control only; these are not haplotype frequencies. ' + selection
     )
     title = 'Usable lead genotypes by group'
     fig = _matrix_figure(
         plt, data['values'], data['loci'], data['groups'], title=title,
-        subtitle=filters + '\nDenominators (exact ID matches): ' + denominators,
+        subtitle=filters + f'\nDenominators ({match_label}): ' + denominators,
         footer=footer, counts=data['counts'],
     )
     caption = (
-        f'Genotype quality control at GWAS lead sites using {matched_samples} exact metadata–VCF ID matches. '
+        f'Genotype quality control at GWAS lead sites using {matched_samples} {match_label} between metadata and VCF. '
         f'Denominators: {denominators}. Each cell is high_quality_called_samples / n_group, '
         f'using the recorded genotype filters ({filters}). '
         f'The {unmatched_samples} unmatched VCF sample IDs remain unassigned and are not plotted. '
-        f'The full source-table counts ({source_counts}) are not the plotting denominators. '
-        'Gray NA means the lead call could not be assessed or the group has no exact matches; '
+        f'The full source-table counts ({source_counts}) describe all supplied participants; '
+        'the plotting denominators are the matched counts above. '
+        'Gray NA means the lead call could not be assessed or the group has no matched participants; '
         '0% means an observed absence of usable calls among a positive denominator. '
         'These are genotype-completeness counts, not haplotype frequencies or group association results. '
         + selection
     )
+    if with_aliases:
+        caption += (f' Matching includes {group_qc["exact_match_sample_count"]} exact IDs and '
+                    f'{group_qc["verified_alias_sample_count"]} explicitly verified aliases.')
     label_note = _group_label_note(data['groups'])
     if label_note:
         caption += ' ' + label_note
@@ -607,6 +634,8 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
         summary, leads, phase, frequencies = None, [], [], []
     else:
         summary, leads, phase, frequencies = run_data
+    from comparison_figures import load_comparison_data, overview_figure, regional_figure, write_plot_tables
+    comparison_data = load_comparison_data(selected_run, summary, leads) if run_data is not None else None
     analysed = [row['locus_id'] for row in leads if row['status'] == 'analysed']
     groups = ordered_groups(summary['group_counts']) if summary is not None else []
     # Keep exported tables readable without changing any frequency denominator.
@@ -628,10 +657,20 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
             figures.append(_category_figure(plt, category_counts, out))
         if qc_data is not None:
             figures.append(_genotype_qc_figure(plt, qc_data, preflight_summary, len(qc_loci), out))
+        if comparison_data is not None:
+            figures.append(overview_figure(plt, comparison_data, summary, out, _save, _style_axis, synthetic))
+            regional = regional_figure(plt, comparison_data, summary, out, _save, _style_axis, synthetic)
+            if regional is not None:
+                figures.append(regional)
         if phase_data is not None:
             figures.append(_phase_figure(plt, phase_data, len(analysed), out, synthetic))
         for locus, data in haplotype_data:
             figures.append(_haplotype_figure(plt, locus, data, out, synthetic))
+    if comparison_data is not None:
+        tables = write_plot_tables(comparison_data, out)
+        for figure in figures:
+            if figure['id'] in tables:
+                figure['plot_data'] = tables[figure['id']]
 
     counts.update({
         'analysed_loci': len(analysed), 'phase_loci_shown': len(phase_loci),
@@ -642,6 +681,8 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
         for name in ['COMPLETED.txt', 'run_summary.json', 'lead_loci.tsv',
                      'group_phase_qc.tsv', 'haplotype_group_frequencies.tsv']:
             run_files[name] = str(selected_run / name)
+        if comparison_data is not None:
+            run_files['regional_variant_frequencies.tsv.gz'] = str(selected_run / 'regional_variant_frequencies.tsv.gz')
     source_paths = [gwas_path] + [Path(path) for path in run_files.values()]
     if metadata_path is not None:
         source_paths.append(metadata_path)
@@ -649,6 +690,10 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
         counts['participant_source_rows'] = sum(category_counts.values())
     if preflight_path is not None:
         source_paths.append(preflight_path)
+    id_map_path = None
+    if preflight_summary and 'id_map' in preflight_summary.get('inputs', {}):
+        id_map_path = Path(preflight_summary['inputs']['id_map']['path']).resolve()
+        source_paths.append(id_map_path)
     if preflight_table is not None:
         source_paths.append(preflight_table)
         counts['lead_genotype_qc'] = {
@@ -670,12 +715,24 @@ def build_figures(*, gwas_path, out_dir, run_dir=None, synthetic=False, p_thresh
             'metadata': str(metadata_path) if metadata_path is not None else None,
             'preflight_summary': str(preflight_path) if preflight_path is not None else None,
             'group_lead_genotype_qc': str(preflight_table) if preflight_table is not None else None,
+            'verified_id_map': str(id_map_path) if id_map_path is not None else None,
         },
         'source_stats': source_stats,
         'synthetic': bool(synthetic), 'p_threshold': str(threshold), 'max_loci': max_loci,
         'group_label_map': group_label_map,
         'counts': counts, 'run_summary': summary,
     }
+    if comparison_data is not None:
+        example = comparison_data['example']
+        manifest['comparison_layout'] = {
+            'inspiration': 'https://www.nature.com/articles/s41588-024-01719-5/figures/1',
+            'source': 'completed_run_aggregate_tables',
+            'regional_selection': 'highest pooled coverage at a unique exact biallelic SNP lead; ties by lead-table order',
+            'regional_locus': example['lead']['locus_id'] if example else None,
+            'regional_biallelic_snps': len(comparison_data['regional']),
+            'regional_other_records_omitted': comparison_data['regional_excluded_records'],
+            'represents_phased_haplotypes': False,
+        }
     (out / 'figure_manifest.json').write_text(json.dumps(manifest, indent=2, allow_nan=False) + '\n')
     return manifest
 
@@ -684,8 +741,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default=str(DEFAULT_CONFIG))
     parser.add_argument('--gwas', help='Filtered GWAS TSV; default from project settings')
-    parser.add_argument('--metadata', help='Optional participant Category TSV for source-count figures')
-    parser.add_argument('--preflight', help='Optional genotype-QC summary JSON for exact-match group call-rate figures')
+    parser.add_argument('--metadata', help='Optional participant category TSV for source-count figures')
+    parser.add_argument('--preflight', help='Optional genotype-QC summary JSON for matched-group call-rate figures')
     parser.add_argument('--run-dir', help='Explicit completed analysis directory; omitted means GWAS only')
     parser.add_argument('--synthetic', action='store_true', help='Label every run figure SYNTHETIC DEMO')
     parser.add_argument('--out', default=str(PROJECT_ROOT / 'results' / 'figures'), help='New or empty figure directory')

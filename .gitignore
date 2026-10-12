@@ -49,3 +49,9 @@ archive/
 **/*.quarto_ipynb
 
 /.quarto/
+
+# Publisher PDFs are local reading copies; public notes link to the publisher.
+literature_review/**/*.pdf
+
+# Reviewed, aggregate-only report published with the standalone figure.
+!docs/figures/report.html

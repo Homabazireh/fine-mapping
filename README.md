@@ -5,6 +5,18 @@ your VCF, and compares local DNA patterns (**haplotypes**) between participant
 groups. A haplotype is a set of variant alleles carried together on one
 chromosome.
 
+## View the figures on GitHub
+
+Open [panel c and its report](docs/figures/README.md) to view the standalone
+paper-inspired figure and download its 600-dpi PNG or vector PDF/SVG. It uses the
+real cohort's aggregate results: 49 Diabetes, 48 Prediabetes and 50 Control
+participants. The figure shows available lead genotypes; no region produced a
+usable haplotype panel.
+
+The [literature review](literature_review/README.md) explains the connection to
+Figueroa et al. (2024). The [GitHub update guide](docs/github.md) describes how
+to commit and push future changes.
+
 ## Start from a fresh checkout
 
 Use Python 3.10 or newer. Run these commands from the repository root:
@@ -20,7 +32,8 @@ packages. Tests requiring local GWAS data or optional plotting packages are
 skipped when those inputs are unavailable. The demo creates generated inputs
 under `data/intermediate/demo/` and a completed run under `results/demo/`.
 
-The repository contains code, settings and report source. Raw data, participant
+The repository contains code, settings, report source, literature notes and the
+selected aggregate figure exports in `docs/figures/`. Raw data, participant
 tables, review files, analysis results, rendered reports, archived originals and
 local tool installations are ignored by Git and are **not included in a clone**.
 
@@ -31,20 +44,35 @@ explanations for:
 
 - An overview of your real `EUR_diagram_t2d_1e-8.tsv` GWAS file.
 - Participant counts displayed as **Diabetes, Prediabetes and Control**.
-- Lead-genotype completeness for the **136 exact metadata–VCF ID matches**.
+- Lead-genotype completeness for **all 147 participants**, using 136 exact
+  metadata–VCF ID matches and 11 user-confirmed aliases.
+- The completed cohort analysis and why none of its 20 selected regions
+  produced a haplotype estimate.
 
-Your latest table is the authoritative category source: **49 Diabetes, 47
-Prediabetes and 51 Control**. The source values remain `T2D`, `Prediabetes` and
-`NORM`; the readable labels are used for display. It supersedes the older ID lists. Eleven participant
-IDs still require confirmation before the full cohort comparison can run.
+Your final supplied table, `data/raw/participant_groups_final.tsv`, is the
+authoritative category source: **49 Diabetes, 48 Prediabetes and 50 Control**.
+Its columns are `External Name`, `Diabetes_Group` and `name`; the code reads
+groups from `Diabetes_Group` and participant IDs from `name`. Source values are
+`T2D`, `Prediabetes` and `Control`, with `T2D` displayed as Diabetes. Compared
+with the previous table, 92 participants change phenotype group and another
+20 have a label-only change from `NORM` to `Control`. All 11 proposed identifier
+pairs are now confirmed and recorded in
+`data/intermediate/participant_review/verified_id_map.tsv`.
 
-The group-QC figure uses 46 Diabetes, 43 Prediabetes and 47 Control participants
-with exact ID matches. The 11 unconfirmed matches remain unassigned. **Real
-cohort haplotype results are not available yet.**
+The group-QC figure uses all 49 Diabetes, 48 Prediabetes and 50 Control
+participants. These comprise 45/44/47 exact matches plus 4/4/3 verified aliases,
+respectively. No participant identifiers remain unresolved.
 
 An indexed check of the 20 default lead variants also found that none meets
 the current 90% genotype-completeness requirement. The highest is 126/147
 (85.71%). Missing genotypes remain missing; the report records this limitation.
+
+The full analysis completed in `results/cohort_categories/` with all 147
+participants and no exclusions. It produced **no haplotype frequency estimates
+or association tests**: 19 regions were skipped for insufficient lead-genotype
+completeness and one for unconfirmed palindromic lead-allele orientation. The
+completed run resolves the grouping question; the available genotypes still
+prevent the intended haplotype comparison.
 
 ## Why an older figure says “synthetic demo”
 
@@ -58,11 +86,13 @@ its source.
 An old editor tab can still point to a previous demo build. Open the current
 `results/report.html` and check `results/report_context.json`: its
 `figure_manifest` field points to the active figure set. The current report has
-`synthetic: false` and `run_dir: null`: it shows the three real-data summaries
-listed above, while the cohort haplotype analysis remains pending.
+`synthetic: false`; its `run_dir` selects `results/cohort_categories/`.
+Genotype completeness and the completed cohort outcome appear in separate
+sections.
 
-These reports, figures and participant data stay local and are ignored by Git.
-Publishing the code does not publish them.
+Full reports, working figure directories and participant data stay local and
+are ignored by Git. Selected aggregate figure copies are published separately
+in `docs/figures/`.
 
 ## Build figures and the report
 
@@ -76,23 +106,25 @@ then run:
 
 ```bash
 .venv/bin/python -m pip install matplotlib
-.venv/bin/python code/build_report.py --render
+.venv/bin/python code/build_report.py \
+  --preflight data/intermediate/confirmed_groups_qc/summary.json --render
 ```
 
-This uses the configured cohort run when complete, plus the GWAS and
-authoritative participant table. While the VCF ID mapping is pending, the report
-shows the GWAS, category source and any saved genotype-completeness check. It
+This uses the configured cohort run when complete, plus the GWAS,
+authoritative participant table and selected genotype-completeness check. It
 saves `results/report.html` and a new folder under `results/figures/`.
 
-Use `--preflight path/to/summary.json` to choose a fresh genotype check. A check
-made with participant metadata can also show group completeness using exact VCF
-ID matches only. This is genotype quality control, not haplotype results.
+Use `--preflight path/to/summary.json` to choose a fresh genotype check that
+uses the same participant table. The current check uses exact VCF ID matches
+and the 11 aliases supplied through `--id-map`. The report records both match
+types and uses their combined counts for genotype quality control.
 
 To include a synthetic example alongside the configured local GWAS:
 
 ```bash
 .venv/bin/python code/run_demo.py
-.venv/bin/python code/build_report.py --demo --render
+.venv/bin/python code/build_report.py --demo \
+  --preflight data/intermediate/confirmed_groups_qc/summary.json --render
 ```
 
 ## Which files should I use?
@@ -103,6 +135,8 @@ To include a synthetic example alongside the configured local GWAS:
 | `code/make_sample_template.py` | Prepare a participant table for checking |
 | `code/check_lead_genotypes.py` | Check genotype completeness at the selected GWAS leads |
 | `code/make_figures.py` | Draw the GWAS and haplotype figures |
+| `code/comparison_figures.py` | Draw paper-inspired cohort and regional panels from saved analysis tables |
+| `code/export_panel_c.py` | Export only panel c at 600 dpi, with vector copies and a focused report |
 | `code/build_report.py` | Put explanations and figures into the report |
 | `code/run_demo.py` | Run the analysis on synthetic data |
 | `config/settings.json` | Change input paths and analysis settings |
@@ -120,12 +154,12 @@ On another machine, supply that input or set `paths.vcf` to its location.
 
 ## Use the real participants
 
-In the prepared workspace, first check `sample_comparison.tsv` and
-`metadata_ids_not_in_vcf.tsv` under `data/intermediate/participant_review/`.
-These local review files are not distributed with the repository.
-Save verified assignments in `data/intermediate/samples.tsv` with columns
-`sample` and `group`. The [analysis guide](docs/analysis.md#participant-groups)
-explains how to prepare this table.
+In the prepared workspace, `data/intermediate/samples.tsv` contains all 147
+verified assignments with columns `sample` and `group`. The 11 confirmed
+aliases are recorded in `data/intermediate/participant_review/verified_id_map.tsv`;
+all sample-table identifiers match the VCF. These local files are not distributed
+with the repository. The [analysis guide](docs/analysis.md#participant-groups)
+explains how to prepare a new table from the supplied metadata and verified map.
 
 After checking the groups and confirming both inputs use GRCh38:
 
@@ -136,7 +170,8 @@ After checking the groups and confirming both inputs use GRCh38:
   --genome-build GRCh38
 
 .venv/bin/python code/build_report.py \
-  --run-dir results/cohort_run_01 --render
+  --run-dir results/cohort_run_01 \
+  --preflight data/intermediate/confirmed_groups_qc/summary.json --render
 ```
 
 Choose a new output folder for each analysis. The configured GWAS cutoff is

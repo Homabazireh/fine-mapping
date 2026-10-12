@@ -2,7 +2,7 @@
 """Check genotype completeness at GWAS leads using the VCF index.
 
 This reads aggregate calls for every VCF sample. Optional metadata adds group
-counts for exact sample-ID matches. It does not assign haplotypes or replace
+counts for exact or explicitly verified sample-ID matches. It does not assign haplotypes or replace
 missing genotypes.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from compare_haplotypes import (
     ALIASES, choose_leads, classify_variant, is_palindromic, parse_call,
     read_gwas, value_or_na, vcf_header, write_table,
 )
-from make_sample_template import read_metadata_groups
+from make_sample_template import _resolve_metadata_groups, read_metadata_groups
 from project_config import DEFAULT_CONFIG, PROJECT_ROOT, load_config, resolve_project_path
 
 
@@ -110,7 +110,7 @@ def inspect_lead(number, lead, records, n_samples, settings):
 
 
 def inspect_lead_groups(number, lead, records, group_indices, settings):
-    """Count each source category using only its exact VCF sample-ID matches."""
+    """Count each source category using its resolved VCF sample indices."""
     _, _, selected = matching_records(lead, records, settings)
     rows = []
     for group, indices in group_indices.items():
@@ -130,8 +130,10 @@ def inspect_lead_groups(number, lead, records, group_indices, settings):
     return rows
 
 
-def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT, metadata_path=None):
+def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT, metadata_path=None, id_map_path=None):
     """Query only selected lead positions and save aggregate QC with provenance."""
+    if id_map_path is not None and metadata_path is None:
+        raise ValueError('--id-map requires --metadata')
     executable = shutil.which('bcftools')
     if executable is None:
         raise RuntimeError('bcftools is required for indexed lead-site checks.')
@@ -149,13 +151,19 @@ def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT, metadata_pa
     if metadata_path is not None:
         inputs['metadata'] = input_info(metadata_path, include_hash=True)
         metadata = read_metadata_groups(metadata_path)
+    if id_map_path is not None:
+        inputs['id_map'] = input_info(id_map_path, include_hash=True)
     samples, contigs, reference_lines = vcf_header(inputs['vcf']['path'])
     group_indices = {}
+    exact_counts, alias_counts = Counter(), Counter()
     if metadata is not None:
+        resolved_groups = _resolve_metadata_groups(metadata, samples, id_map_path)
         group_indices = {group: [] for group in metadata.values()}
         for index, sample in enumerate(samples):
-            if sample in metadata:
-                group_indices[metadata[sample]].append(index)
+            if sample in resolved_groups:
+                group = resolved_groups[sample]
+                group_indices[group].append(index)
+                (exact_counts if sample in metadata else alias_counts)[group] += 1
     gwas_args = SimpleNamespace(gwas=inputs['gwas']['path'], p_threshold=parameters['p_threshold'],
                                **{f'{name}_col': None for name in ALIASES})
     gwas, gwas_counts, columns = read_gwas(gwas_args, contigs)
@@ -213,15 +221,21 @@ def check_lead_genotypes(config=DEFAULT_CONFIG, out_dir=DEFAULT_OUT, metadata_pa
                                  for row in group_rows], group_fields)
         matched_count = sum(len(indices) for indices in group_indices.values())
         summary['group_qc'] = dict(
-            scope='exact_metadata_id_matches_only',
+            scope='exact_and_verified_id_matches' if id_map_path is not None else 'exact_metadata_id_matches_only',
             source_category_counts=dict(Counter(metadata.values())),
+            exact_match_category_counts={group: exact_counts[group] for group in group_indices},
+            verified_alias_category_counts={group: alias_counts[group] for group in group_indices},
             matched_category_counts={group: len(indices) for group, indices in group_indices.items()},
+            exact_match_sample_count=sum(exact_counts.values()),
+            verified_alias_sample_count=sum(alias_counts.values()),
             matched_sample_count=matched_count,
             unmatched_vcf_count=len(samples) - matched_count,
-            unmatched_metadata_count=len(set(metadata) - set(samples)),
+            unmatched_metadata_count=len(metadata) - matched_count,
             table=str(group_table.resolve()),
         )
-        summary['notes'].append('Group QC uses exact metadata IDs only. Unmatched IDs are not assigned to any category; this is not a subset haplotype analysis.')
+        matching_note = ('Group QC uses exact IDs plus the supplied verified one-to-one alias map.'
+                         if id_map_path is not None else 'Group QC uses exact metadata IDs only.')
+        summary['notes'].append(matching_note + ' Unmatched IDs are not assigned to any category; this is not a subset haplotype analysis.')
     (out / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print(f"Checked {summary['n_leads']} leads across {summary['n_samples']} samples. "
           f"Passing call rate: {summary['leads_passing_call_rate']}. Outputs: {out.resolve()}")
@@ -233,9 +247,10 @@ def main(argv=None):
     parser.add_argument('--config', default=str(DEFAULT_CONFIG), help='Project settings JSON')
     parser.add_argument('--out', type=Path, default=DEFAULT_OUT, help='New or empty preflight output directory')
     parser.add_argument('--metadata', type=Path, help='Optional category TSV for exact-ID group QC; aliases are not inferred')
+    parser.add_argument('--id-map', type=Path, help='Verified aliases TSV with metadata_sample and vcf_sample columns; requires --metadata')
     args = parser.parse_args(argv)
     try:
-        check_lead_genotypes(args.config, args.out, metadata_path=args.metadata)
+        check_lead_genotypes(args.config, args.out, metadata_path=args.metadata, id_map_path=args.id_map)
     except (OSError, ValueError, RuntimeError) as error:
         parser.error(str(error))
     return 0

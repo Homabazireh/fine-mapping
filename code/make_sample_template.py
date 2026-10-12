@@ -8,7 +8,7 @@ from compare_haplotypes import DEFAULT_VCF, vcf_header, write_table
 from project_config import ConfigArgumentParser
 
 
-def _tsv_rows(path, required_columns):
+def _tsv_rows(path, required_columns, alternative_schemas=()):
     """Read a TSV, tolerating surrounding header whitespace only."""
     with Path(path).open(encoding='utf-8-sig', newline='') as handle:
         reader = csv.DictReader(handle, delimiter='\t')
@@ -20,6 +20,9 @@ def _tsv_rows(path, required_columns):
         missing = set(required_columns) - set(columns)
         if missing:
             raise ValueError(f'{path}: missing columns: {", ".join(sorted(missing))}')
+        if alternative_schemas and not any(set(schema) <= set(columns) for schema in alternative_schemas):
+            expected = ' or '.join(' + '.join(schema) for schema in alternative_schemas)
+            raise ValueError(f'{path}: missing metadata schema: expected {expected}')
         reader.fieldnames = columns
         for row in reader:
             line = reader.line_num
@@ -29,11 +32,17 @@ def _tsv_rows(path, required_columns):
 
 
 def read_metadata_groups(metadata_path):
-    """Return exact Tubingen ID -> unchanged Category values from metadata."""
+    """Read either participant-table schema without changing IDs or categories."""
     groups = {}
-    for line, row in _tsv_rows(metadata_path, ['name (Tubingen ID)', 'Category']):
-        sample = row['name (Tubingen ID)']
-        category = row['Category']
+    schemas = [('name (Tubingen ID)', 'Category'), ('name', 'Diabetes_Group')]
+    for line, row in _tsv_rows(metadata_path, [], alternative_schemas=schemas):
+        sample_fields = [field for field in ('name (Tubingen ID)', 'name') if field in row]
+        category_fields = [field for field in ('Category', 'Diabetes_Group') if field in row]
+        for label, fields in [('sample ID', sample_fields), ('category', category_fields)]:
+            if len({row[field] for field in fields}) != 1:
+                raise ValueError(f'{metadata_path}: conflicting {label} columns on line {line}')
+        sample = row[sample_fields[0]]
+        category = row[category_fields[0]]
         if not sample.strip():
             raise ValueError(f'{metadata_path}: empty Tubingen ID on line {line}')
         if not category.strip():
@@ -56,6 +65,8 @@ def _resolve_metadata_groups(metadata, vcf_samples, id_map_path=None):
 
     sources, targets = set(), set()
     for line, row in _tsv_rows(id_map_path, ['metadata_sample', 'vcf_sample']):
+        if 'status' in row and row['status'].strip().lower() not in {'confirmed', 'verified'}:
+            raise ValueError(f'{id_map_path}: alias status must be confirmed or verified on line {line}')
         source, target = row['metadata_sample'], row['vcf_sample']
         if not source.strip() or not target.strip():
             raise ValueError(f'{id_map_path}: empty ID on line {line}')
@@ -92,7 +103,7 @@ def main(argv=None):
                                   path_defaults={'vcf': 'vcf'})
     parser.add_argument('--vcf', default=str(DEFAULT_VCF), help='Multisample VCF or VCF.gz')
     parser.add_argument('--out', required=True, help='New sample metadata TSV')
-    parser.add_argument('--metadata', help='TSV containing name (Tubingen ID) and Category columns')
+    parser.add_argument('--metadata', help='TSV containing name + Diabetes_Group or name (Tubingen ID) + Category columns')
     parser.add_argument('--id-map', help='Verified aliases TSV with metadata_sample and vcf_sample columns; requires --metadata')
     args = parser.parse_args(argv)
     if args.id_map and not args.metadata:

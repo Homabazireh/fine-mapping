@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-10-12T19:05:33.047515+00:00",
+  "synthetic": false,
+  "title": "Panel c: usable lead genotypes across selected regions",
+  "source_run": "cohort_no_preflight",
+  "source_run_completed_at_utc": "2026-10-12T17:33:17.719574+00:00",
+  "genome_build": "GRCh38",
+  "files": {
+    "png": "panel_c.png",
+    "pdf": "panel_c.pdf",
+    "svg": "panel_c.svg",
+    "data": "panel_c_data.tsv"
+  },
+  "png_dpi": 600,
+  "group_counts": {
+    "T2D": 49,
+    "Prediabetes": 48,
+    "Control": 50
+  },
+  "n_samples": 147,
+  "n_leads": 20,
+  "min_call_rate": 0.9,
+  "lead_sites_passing": 0,
+  "max_high_quality_called": 126,
+  "max_high_quality_call_rate": 0.8571428571428571,
+  "best_locus_id": "L0010",
+  "best_lead": {
+    "chrom": "chr2",
+    "pos": 226251649,
+    "ref": "A",
+    "alt": "G"
+  },
+  "parameters": {
+    "min_dp": 10.0,
+    "min_gq": 20.0,
+    "min_call_rate": 0.9
+  },
+  "locus_status_counts": {
+    "lead_below_min_call_rate": 19,
+    "palindromic_lead_orientation_unconfirmed": 1
+  },
+  "haplotype_carrier_tests_performed": 0,
+  "high_quality_homozygous_reference_genotypes": 0,
+  "preflight_disabled": true,
+  "source_paper_url": "https://www.nature.com/articles/s41588-024-01719-5/figures/1",
+  "interpretation": "Genotype completeness only; not haplotype frequencies, ancestry or group association results.",
+  "sha256": {
+    "png": "e2a29c3aaa16d04dbeb069052393dc7a20bbda5b9e8bf4f70fa20ba800c6fdc8",
+    "pdf": "2b03c393081fb40f35f3923991a0bce24057e0f95a72a458a34cf629645777a5",
+    "svg": "0c2198bfec21e25594395aefe3a10ba61fd2ecb443bb70221b2970b948650cfa",
+    "data": "465faec2cea5b008f099e4ef842e4633534ecfb0111f122a4af350540ae3a11f"
+  }
+}

@@ -1,0 +1,31 @@
+NONE OF THE 20 LEAD SITES MEETS 90% COMPLETENESS
+
+This completed analysis included all 147 participants: 49 Diabetes, 48 Prediabetes, 50 Control. At the best-covered lead, 126/147 participants (85.7%) had a genotype meeting DP ≥ 10 and GQ ≥ 20.
+
+HOW TO READ PANEL C
+
+A genotype is a DNA call at one position. A usable genotype meets the recorded read-depth (DP) and call-quality (GQ) requirements. Labels L0001–L0020 identify regions ranked by GWAS significance; they are not participant IDs. Each row represents one GWAS lead site. Colored dots show the share of participants with usable genotypes within each group. Black diamonds combine all participants; the counts on the right use 147 as their denominator. The dashed line marks the 90% completeness requirement. Positions further right mean more complete genotype data, not greater diabetes risk or a stronger genetic effect.
+
+WHAT THE RESULT MEANS
+
+The completed run produced 0 usable haplotype panels and performed 0 haplotype association tests. No haplotype frequencies or differences in those frequencies between groups could be estimated. This does not establish that the groups have identical haplotypes. Recorded region exclusions: 19 for insufficient usable lead genotypes; 1 for unconfirmed palindromic allele orientation.
+
+The separate preliminary VCF check was skipped. This figure uses tables already saved by the completed analysis; creating it does not rescan the VCF. The analysis retained its internal genotype and phase requirements. Missing genotypes remain missing.
+
+No high-quality homozygous-reference (0/0) calls were recorded in the selected windows. The figure describes the available calls; it cannot identify the cause of this absence.
+
+SOURCE
+
+Visual organization inspired by Figueroa et al. (2024), Figure 1. Every plotted value comes from this cohort; the figure shows genotype completeness, not the paper's shared chromosome patterns.
+
+https://www.nature.com/articles/s41588-024-01719-5/figures/1
+
+Source run completed (UTC): 2026-10-12T17:33:17.719574+00:00. Genome build: GRCh38.
+
+FILES
+panel_c.png: PNG · 600 dpi
+panel_c.pdf: PDF · scalable
+panel_c.svg: SVG · editable
+panel_c_data.tsv: Plotted data · TSV
+panel_c_manifest.json: Figure provenance · JSON
+REPORT.txt: Plain-text report

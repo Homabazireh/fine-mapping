@@ -63,6 +63,15 @@ allele-alignment, reference-provenance and LD validity requirements are not
 disabled by these options. See [external methods and preparation](external_finemapping.md)
 for the assumptions and required input files.
 
+Kriging LD diagnostics use local seed `20261013` with R's `Mersenne-Twister`,
+`Inversion` and `Rejection` RNG algorithms. This stabilizes the randomized
+truncated-SVD initialization used by `mixsqp`/`irlba`, independently of earlier
+random-number use and worker scheduling. The diagnostic call restores the caller's
+RNG kind and seed state, including on errors. The run manifest records this policy
+and the dependency versions; reproducing numerical results also requires the same
+inputs and compatible software. These internal reproducibility settings do not
+change or bypass any diagnostic threshold.
+
 ## RStudio
 
 Open the repository as the working directory, install the required R packages

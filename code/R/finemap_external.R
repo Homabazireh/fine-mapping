@@ -11,6 +11,10 @@ EXTERNAL_QC <- list(min_maf = .01, max_af_difference = .1, matrix_tolerance = 1e
   s_warning = .1, s_block = .5, kriging_abs_residual_warning = 6, kriging_logLR_warning = 2,
   kriging_abs_z_for_logLR = 2, boundary_distance_bp = 5000,
   strong_association_p = 5e-8, max_effects = 10L, max_iter = 200L, coverage = .95)
+EXTERNAL_DIAGNOSTIC_RNG <- list(seed = 20261013L, kind = "Mersenne-Twister",
+  normal_kind = "Inversion", sample_kind = "Rejection",
+  scope = "Each primary and total-N kriging_rss call uses this local seed; caller RNG kind and state are restored, including on error.",
+  reason = "kriging_rss uses mixsqp truncated SVD, whose irlba initialization consumes random numbers; a local seed makes diagnostics independent of prior RNG state and worker scheduling.")
 EXTERNAL_METHODS <- c("https://stephenslab.github.io/susieR/reference/susie_rss.html",
   "https://stephenslab.github.io/susieR/articles/susierss_diagnostic.html",
   "https://elifesciences.org/articles/88768")
@@ -207,12 +211,26 @@ external_load_locus <- function(input_dir, entry, total_n, qc = EXTERNAL_QC) {
     window = window, minimum_eigenvalue = checked$minimum_eigenvalue, eigenvalue_tolerance = checked$eigenvalue_tolerance)
 }
 
+external_with_diagnostic_rng <- function(expression) {
+  previous_kind <- RNGkind()
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  previous_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
+  on.exit({
+    do.call(RNGkind, as.list(previous_kind))
+    if (had_seed) assign(".Random.seed", previous_seed, envir = .GlobalEnv)
+    else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) rm(".Random.seed", envir = .GlobalEnv)
+  })
+  set.seed(EXTERNAL_DIAGNOSTIC_RNG$seed, kind = EXTERNAL_DIAGNOSTIC_RNG$kind,
+    normal.kind = EXTERNAL_DIAGNOSTIC_RNG$normal_kind, sample.kind = EXTERNAL_DIAGNOSTIC_RNG$sample_kind)
+  force(expression)
+}
+
 external_diagnostics <- function(variants, R, n, qc = EXTERNAL_QC) {
   z <- variants$beta/variants$se
   if (any(!is.finite(z))) stop("Nonfinite beta/SE z score.")
   s <- susieR::estimate_s_rss(z = z, R = R, n = n)
   if (length(s) != 1L || !is.finite(s) || s < 0 || s > 1) stop("Nonfinite or invalid estimate_s_rss diagnostic.")
-  kriging <- susieR::kriging_rss(z = z, R = R, n = n, s = s)
+  kriging <- external_with_diagnostic_rng(susieR::kriging_rss(z = z, R = R, n = n, s = s))
   d <- kriging$conditional_dist
   fields <- c("z", "condmean", "condvar", "z_std_diff", "logLR")
   if (!is.data.frame(d) || nrow(d) != length(z) || !all(fields %in% names(d)) || any(!is.finite(as.matrix(d[, fields]))) || any(d$condvar <= 0)) stop("Invalid kriging diagnostics; inference unavailable.")
@@ -439,6 +457,7 @@ run_external_finemapping <- function(input_dir = NULL, out = NULL, workers = 4L,
   record <- list(analysis = "exploratory_window_limited_external_SuSiE_RSS", private_results = TRUE,
     input_dir = input_dir, input_manifest_sha256 = manifest$sha256, source_provenance = manifest$data$provenance,
     script_sha256 = script_hash, configuration = config_record, effective_settings = effective_settings,
+    diagnostic_rng = EXTERNAL_DIAGNOSTIC_RNG,
     requested_locus = locus, loci_attempted = length(entries), loci_total = length(manifest$data$loci), workers = workers,
     variant_types = options$variant_types,
     variant_selection_note = "All source variants and full LD pass validation before matched row/column selection; class-restricted fits cannot evaluate omitted variant classes.",
@@ -452,7 +471,7 @@ run_external_finemapping <- function(input_dir = NULL, out = NULL, workers = 4L,
     automated_allele_flips = FALSE, diagnostic_outlier_removal = FALSE, thresholds = qc,
     diagnostic_threshold_note = "Conservative reporting heuristics, not calibrated association significance tests or universally validated mismatch thresholds. s>=0.5, invalid/nonfinite diagnostics or unconverged fits have no PIPs; milder finite diagnostic warnings remain explicitly exploratory.",
     validated_causal_candidates = FALSE, cohort_haplotype_inference_modified = FALSE,
-    R_version = R.version.string, packages = as.list(vapply(c("susieR", "jsonlite", "openssl"), function(x) as.character(packageVersion(x)), character(1))),
+    R_version = R.version.string, packages = as.list(vapply(c("susieR", "mixsqp", "irlba", "jsonlite", "openssl"), function(x) as.character(packageVersion(x)), character(1))),
     methods = as.list(EXTERNAL_METHODS), status_counts = as.list(table(table$status)),
     completed_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE))
   index <- c("# Window-limited external fine-mapping", "",

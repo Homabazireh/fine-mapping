@@ -152,6 +152,40 @@ parallel_out <- file.path(folder, "parallel"); batch <- run_external_finemapping
 parallel_pip <- read.delim(file.path(parallel_out, "SYNTHETIC_B", "variant_pip.tsv"))
 assert(batch$loci_attempted == 2 && max(abs(parallel_pip$pip-pip$pip)) < 1e-12, "Parallel batch disagrees with pilot")
 assert(identical(read.delim(file.path(parallel_out, "locus_summary.tsv"))$locus_id, c("SYNTHETIC", "SYNTHETIC_B")), "Batch lost manifest locus order")
+# mixsqp/irlba uses randomized truncated SVD inside kriging: seed locally and
+# preserve the caller's RNG kind/state on success, failure and uninitialized use.
+test_diagnostic_rng <- function() {
+  old_kind <- RNGkind(); had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv) else NULL
+  on.exit({ do.call(RNGkind, as.list(old_kind)); if (had_seed) assign(".Random.seed", old_seed, envir = .GlobalEnv) else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) rm(".Random.seed", envir = .GlobalEnv) })
+  dR <- toeplitz(.7^(0:63)); dz <- dR[, 8]*8+dR[, 25]*3
+  dv <- data.frame(variant_id = paste0("diagnostic_synthetic_", 1:64), variant_type = "SNP", beta = dz*.01, se = .01)
+  set.seed(123L, kind = "L'Ecuyer-CMRG", normal.kind = "Inversion", sample.kind = "Rejection")
+  caller_kind <- RNGkind(); caller_seed <- .Random.seed
+  first <- external_diagnostics(dv, dR, 30000)
+  assert(identical(RNGkind(), caller_kind) && identical(.Random.seed, caller_seed), "Successful diagnostic changed caller RNG kind/state")
+  set.seed(987L, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
+  other_seed <- .Random.seed; second <- external_diagnostics(dv, dR, 30000)
+  assert(identical(first, second) && identical(.Random.seed, other_seed), "Diagnostics vary with caller seed or RNG algorithm")
+  expected_rng <- external_with_diagnostic_rng(c(runif(3), rnorm(3)))
+  set.seed(456L); assert(identical(expected_rng, external_with_diagnostic_rng(c(runif(3), rnorm(3)))), "Local RNG helper failed to reset its declared seed")
+  caller_kind <- RNGkind(); caller_seed <- .Random.seed
+  fails(external_with_diagnostic_rng({ runif(2); stop("synthetic diagnostic error") }), "Diagnostic error was swallowed", "synthetic diagnostic error")
+  assert(identical(RNGkind(), caller_kind) && identical(.Random.seed, caller_seed), "Failed diagnostic changed caller RNG kind/state")
+  rm(".Random.seed", envir = .GlobalEnv)
+  absent <- external_diagnostics(dv, dR, 30000)
+  assert(identical(first, absent) && !exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE) && identical(RNGkind(), caller_kind), "Diagnostic created a persistent RNG seed when none existed")
+  fails(external_with_diagnostic_rng({ rnorm(2); stop("synthetic absent-seed error") }), "Absent-seed error was swallowed")
+  assert(!exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE) && identical(RNGkind(), caller_kind), "Diagnostic error created a persistent RNG seed")
+  parallel_diagnostics <- parallel::mclapply(c(11L, 912L), function(seed) { set.seed(seed); external_diagnostics(dv, dR, 30000) }, mc.cores = 2L)
+  assert(all(vapply(parallel_diagnostics, identical, logical(1), first)), "Diagnostic output depends on worker RNG state")
+}
+test_diagnostic_rng()
+for (name in c("diagnostics.tsv", "diagnostics_total_n.tsv")) {
+  assert(identical(read.delim(file.path(out, "SYNTHETIC", name)), read.delim(file.path(parallel_out, "SYNTHETIC_B", name))), "Actual single-worker and parallel-worker diagnostic tables disagree")
+}
+assert(identical(run$diagnostic_rng, EXTERNAL_DIAGNOSTIC_RNG) && all(c("mixsqp", "irlba") %in% names(run$packages)), "Diagnostic RNG policy or numerical dependency provenance missing")
+
 # Explicit JSON defaults reproduce the same model, with exact configuration provenance.
 m <- write_fixture()
 config_dir <- file.path(folder, "configuration files"); dir.create(config_dir)
@@ -277,4 +311,4 @@ assert(!file.exists(file.path(mutation_out, "COMPLETED.txt")), "Changed configur
 help_output <- system2(file.path(R.home("bin"), "Rscript"), c(shQuote(EXTERNAL_SCRIPT_PATH), "--help"), stdout = TRUE, stderr = TRUE)
 assert(is.null(attr(help_output, "status")) && all(vapply(c("--config", "--max-effects", "--variant-types", "--plot-formats", "RStudio"), function(x) any(grepl(x, help_output, fixed = TRUE)), logical(1))), "Standalone CLI help failed or omitted key options")
 on.exit_cleanup()
-cat("PASS: joint SNP/indel SuSiE; fixed provenance/LD gates; configuration/default parity; CLI/RStudio overrides; exact config snapshots; selected LD alignment; insufficient variants; configurable models and PNG/PDF/SVG; preserved runs.\n")
+cat("PASS: joint SNP/indel SuSiE; fixed provenance/LD gates; configuration/default parity; CLI/RStudio overrides; exact config snapshots; selected LD alignment; insufficient variants; configurable models and PNG/PDF/SVG; locally deterministic diagnostics with caller RNG restoration; preserved runs.\n")

@@ -24,13 +24,14 @@ import json
 import math
 from pathlib import Path
 import re
+from statistics import NormalDist
 import sys
 from typing import TextIO
 
 from project_config import ConfigArgumentParser, DEFAULT_PATHS, resolve_project_path
 from group_labels import display_group, ordered_groups
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 DEFAULT_GWAS = resolve_project_path(DEFAULT_PATHS['gwas'])
 DEFAULT_VCF = resolve_project_path(DEFAULT_PATHS['vcf'])
 DNA = set("ACGT")
@@ -510,7 +511,7 @@ def scan_vcf(args, vcf_samples, samples, mapping, groups, loci, out):
 
 
 def bh_adjust(p_values: list[float | None]):
-    """One Benjamini-Hochberg family across every finite haplotype carrier test."""
+    """Adjust one explicit family of finite p-values; untested rows stay missing."""
     valid = sorted((p, i) for i, p in enumerate(p_values) if p is not None and math.isfinite(p))
     result, running = [None] * len(p_values), 1.0
     total = len(valid)
@@ -532,6 +533,86 @@ def carrier_test(a: int, n_a: int, b: int, n_b: int):
     return float(result.statistic), float(interval.low), float(interval.high), p
 
 
+def overall_carrier_test(carriers: list[int], totals: list[int]):
+    """Exact probability-ordered Fisher–Freeman–Halton test for 2/3 groups.
+
+    Conditional on row totals and the pooled carrier count, each feasible
+    table has weight product(comb(n_group, carriers_group)). Python integers
+    preserve probability ties exactly, without simulation or asymptotics.
+    Each participant contributes one carrier/noncarrier outcome.
+    """
+    if len(carriers) != len(totals) or len(totals) not in {2, 3}:
+        raise ValueError("Overall exact carrier tests require two or three groups.")
+    if any(not isinstance(n, int) or not isinstance(k, int) or n <= 0 or not 0 <= k <= n
+           for k, n in zip(carriers, totals)):
+        raise ValueError("Carrier counts must be integers between zero and a positive group total.")
+    pooled = sum(carriers)
+    combinations_by_group = [[math.comb(n, k) for k in range(n + 1)] for n in totals]
+    observed = math.prod(choices[k] for choices, k in zip(combinations_by_group, carriers))
+    numerator, n_tables = 0, 0
+
+    def enumerate_tables(group, remaining, weight):
+        nonlocal numerator, n_tables
+        if group == len(totals) - 1:
+            if 0 <= remaining <= totals[group]:
+                table_weight = weight * combinations_by_group[group][remaining]
+                n_tables += 1
+                if table_weight <= observed:
+                    numerator += table_weight
+            return
+        lower = max(0, remaining - sum(totals[group + 1:]))
+        upper = min(totals[group], remaining)
+        for k in range(lower, upper + 1):
+            enumerate_tables(group + 1, remaining - k, weight * combinations_by_group[group][k])
+
+    enumerate_tables(0, pooled, 1)
+    return numerator / math.comb(sum(totals), pooled), n_tables
+
+
+def carrier_difference_interval(a: int, n_a: int, b: int, n_b: int):
+    """Carrier-frequency difference and Newcombe–Wilson method-10 95% CI.
+
+    This score-based interval is not an exact interval and is not adjusted
+    for multiple testing. See Newcombe (1998), doi:10.1002/(SICI)1097-0258
+    (19980430)17:8<873::AID-SIM779>3.0.CO;2-I.
+    """
+    if n_a <= 0 or n_b <= 0 or not 0 <= a <= n_a or not 0 <= b <= n_b:
+        raise ValueError("A carrier-frequency difference requires valid nonempty groups.")
+    z = NormalDist().inv_cdf(0.975)
+
+    def wilson(k, n):
+        p = k / n
+        denominator = 1 + z * z / n
+        centre = (p + z * z / (2 * n)) / denominator
+        radius = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
+        return max(0.0, centre - radius), min(1.0, centre + radius)
+
+    p_a, p_b = a / n_a, b / n_b
+    low_a, high_a = wilson(a, n_a)
+    low_b, high_b = wilson(b, n_b)
+    difference = p_a - p_b
+    low = difference - math.hypot(p_a - low_a, high_b - p_b)
+    high = difference + math.hypot(high_a - p_a, p_b - low_b)
+    return difference, max(-1.0, low), min(1.0, high)
+
+
+def carrier_test_status(args, carriers, resolved, group_sizes):
+    """Apply the same provenance and resolution gates to every hypothesis."""
+    if not args.test_associations:
+        return "not_requested"
+    if not args.reference_genotypes_confirmed:
+        return "not_tested_reference_provenance"
+    if min(resolved) < args.min_test_samples:
+        return "too_few_resolved_samples"
+    if min(n / size for n, size in zip(resolved, group_sizes)) < args.min_resolved_fraction:
+        return "low_resolved_fraction"
+    if sum(carriers) in {0, sum(resolved)}:
+        return "no_carrier_variation"
+    if min(sum(carriers), sum(resolved) - sum(carriers)) < args.min_carriers:
+        return "too_few_carriers_or_noncarriers"
+    return "tested_unadjusted"
+
+
 MARKER_FIELDS = ["locus_id", "marker_number", "variant_id", "chrom", "pos", "ref", "alt", "type", "is_lead",
                  "allele_index_to_sequence", "lead_effect_allele_index", "pooled_call_rate", "nonmajor_allele_count"]
 SAMPLE_FIELDS = ["locus_id", "sample", "group", "status", "PS", "n_markers", "haplotype_1", "haplotype_2",
@@ -541,7 +622,11 @@ FREQ_FIELDS = ["locus_id", "haplotype_id", "allele_indices", "allele_sequences",
                "haplotype_frequency", "carriers", "carrier_frequency"]
 COMP_FIELDS = ["locus_id", "haplotype_id", "group_a", "group_b", "n_resolved_a", "n_resolved_b", "carriers_a", "carriers_b",
                "carrier_frequency_a", "carrier_frequency_b", "test_status", "conditional_odds_ratio_a_vs_b",
-               "CI95_low", "CI95_high", "p_fisher_two_sided", "q_BH_all_haplotype_tests"]
+               "CI95_low", "CI95_high", "p_fisher_two_sided", "q_BH_all_haplotype_tests",
+               "carrier_frequency_difference_a_minus_b", "carrier_difference_CI95_low", "carrier_difference_CI95_high",
+               "q_BH_all_pairwise_tests"]
+OVERALL_FIELDS = ["locus_id", "haplotype_id", "groups", "n_resolved", "carriers", "test_status", "test_method",
+                  "n_tables", "p_fisher_overall", "q_BH_all_overall_tests"]
 GROUP_QC_FIELDS = ["locus_id", "group", "n_group", "n_resolved", "n_unresolved", "resolved_fraction", "exclusion_reasons"]
 GENOTYPE_FIELDS = ["locus_id", "sample", "group", "variant_id", "GT", "PS", "call_status"]
 
@@ -549,6 +634,7 @@ GENOTYPE_FIELDS = ["locus_id", "sample", "group", "variant_id", "GT", "PS", "cal
 def analyse_loci(args, samples, mapping, groups, loci, out):
     """Resolve each shared marker panel and write group counts and comparisons."""
     marker_rows, sample_rows, freq_rows, comparison_rows, group_qc, genotype_rows = [], [], [], [], [], []
+    overall_rows = []
     plot_payload = []
     group_sizes = Counter(mapping.values())
     for locus in loci:
@@ -619,37 +705,53 @@ def analyse_loci(args, samples, mapping, groups, loci, out):
                                       resolved_fraction=value_or_na(n / group_sizes[group]), haplotype_copies=copies, resolved_chromosomes=2 * n,
                                       haplotype_frequency=value_or_na(fraction(copies, 2 * n)), carriers=carriers,
                                       carrier_frequency=value_or_na(fraction(carriers, n))))
+            overall_carriers = [carrier_counts[group] for group in groups]
+            overall_resolved = [len(resolved[group]) for group in groups]
+            overall_status = carrier_test_status(args, overall_carriers, overall_resolved,
+                                                 [group_sizes[group] for group in groups])
+            overall_p, n_tables = None, None
+            if overall_status == "tested_unadjusted":
+                if len(groups) not in {2, 3}:
+                    overall_status = "unsupported_overall_group_count"
+                else:
+                    overall_p, n_tables = overall_carrier_test(overall_carriers, overall_resolved)
+            overall_rows.append(dict(locus_id=locus.ident, haplotype_id=ids[hap], groups=json.dumps(groups),
+                                     n_resolved=json.dumps(overall_resolved), carriers=json.dumps(overall_carriers),
+                                     test_status=overall_status, test_method="fisher_freeman_halton_exact",
+                                     n_tables=n_tables, p_fisher_overall=overall_p))
             for group_a, group_b in combinations(groups, 2):
                 n_a, n_b = len(resolved[group_a]), len(resolved[group_b])
                 a, b = carrier_counts[group_a], carrier_counts[group_b]
-                status, odds, low, high, p = "not_requested", None, None, None, None
-                if args.test_associations:
-                    status = "tested_unadjusted"
-                    if min(n_a, n_b) < args.min_test_samples:
-                        status = "too_few_resolved_samples"
-                    elif min(n_a / group_sizes[group_a], n_b / group_sizes[group_b]) < args.min_resolved_fraction:
-                        status = "low_resolved_fraction"
-                    elif a + b == 0 or a + b == n_a + n_b:
-                        status = "no_carrier_variation"
-                    elif min(a + b, n_a + n_b - a - b) < args.min_carriers:
-                        status = "too_few_carriers_or_noncarriers"
-                    else:
-                        odds, low, high, p = carrier_test(a, n_a, b, n_b)
+                status = carrier_test_status(args, [a, b], [n_a, n_b],
+                                             [group_sizes[group_a], group_sizes[group_b]])
+                odds, low, high, p, difference, difference_low, difference_high = (None,) * 7
+                if status == "tested_unadjusted":
+                    odds, low, high, p = carrier_test(a, n_a, b, n_b)
+                    difference, difference_low, difference_high = carrier_difference_interval(a, n_a, b, n_b)
                 comparison_rows.append(dict(locus_id=locus.ident, haplotype_id=ids[hap], group_a=group_a, group_b=group_b,
                                             n_resolved_a=n_a, n_resolved_b=n_b, carriers_a=a, carriers_b=b,
                                             carrier_frequency_a=fraction(a, n_a), carrier_frequency_b=fraction(b, n_b), test_status=status,
-                                            conditional_odds_ratio_a_vs_b=odds, CI95_low=low, CI95_high=high, p_fisher_two_sided=p))
+                                            conditional_odds_ratio_a_vs_b=odds, CI95_low=low, CI95_high=high, p_fisher_two_sided=p,
+                                            carrier_frequency_difference_a_minus_b=difference,
+                                            carrier_difference_CI95_low=difference_low, carrier_difference_CI95_high=difference_high))
         if args.plot and len(plot_payload) < args.max_plots:
             plot_payload.append((locus, panel, assignments))
     adjusted = bh_adjust([row["p_fisher_two_sided"] for row in comparison_rows])
     for row, q in zip(comparison_rows, adjusted):
         row["q_BH_all_haplotype_tests"] = q
+        row["q_BH_all_pairwise_tests"] = q
         for key in COMP_FIELDS:
+            row[key] = value_or_na(row[key])
+    overall_adjusted = bh_adjust([row["p_fisher_overall"] for row in overall_rows])
+    for row, q in zip(overall_rows, overall_adjusted):
+        row["q_BH_all_overall_tests"] = q
+        for key in OVERALL_FIELDS:
             row[key] = value_or_na(row[key])
     write_table(out / "selected_markers.tsv", marker_rows, MARKER_FIELDS)
     write_table(out / "sample_haplotypes.tsv", sample_rows, SAMPLE_FIELDS)
     write_table(out / "haplotype_group_frequencies.tsv", freq_rows, FREQ_FIELDS)
     write_table(out / "haplotype_comparisons.tsv", comparison_rows, COMP_FIELDS)
+    write_table(out / "haplotype_overall_comparisons.tsv", overall_rows, OVERALL_FIELDS)
     write_table(out / "group_phase_qc.tsv", group_qc, GROUP_QC_FIELDS)
     write_table(out / "selected_marker_genotypes.tsv.gz", genotype_rows, GENOTYPE_FIELDS)
     for payload in plot_payload:
@@ -730,12 +832,13 @@ def argument_parser():
     p.add_argument("--expected-per-group", type=int, help="Optional strict sample-count check, e.g. 49")
     p.add_argument("--gwas-alleles-forward-confirmed", action="store_true",
                    help="You have verified forward-reference GWAS allele orientation, allowing palindromic/negative-liftover leads")
-    p.add_argument("--test-associations", action=argparse.BooleanOptionalAction, help="Optional exploratory unadjusted participant-level carrier Fisher tests")
+    p.add_argument("--test-associations", action=argparse.BooleanOptionalAction,
+                   help="Request exploratory participant-level overall/pairwise carrier Fisher tests; unconfirmed reference calls produce unavailable tests")
     p.add_argument("--reference-genotypes-confirmed", action="store_true",
                    help="You have verified genuine reference/nonreference calls, not variant-only merges or missing-to-reference filling")
     p.add_argument("--min-test-samples", type=int, default=10)
     p.add_argument("--min-resolved-fraction", type=float, default=0.80)
-    p.add_argument("--min-carriers", type=int, default=3, help="Minimum pooled carriers AND noncarriers in each pairwise test")
+    p.add_argument("--min-carriers", type=int, default=3, help="Minimum pooled carriers AND noncarriers in each overall or pairwise test")
     p.add_argument("--plot", action=argparse.BooleanOptionalAction, help="Write actual selected-marker haplotype PNG matrices")
     p.add_argument("--max-plots", type=int, default=10)
     for key in ALIASES:
@@ -780,10 +883,7 @@ def validate_run_options(args):
     threshold = Decimal(args.p_threshold)
     if not threshold.is_finite() or not 0 <= threshold <= 1:
         raise ValueError("p-threshold must be within [0,1].")
-    if args.test_associations and not args.reference_genotypes_confirmed:
-        raise ValueError("Association tests require --reference-genotypes-confirmed AFTER independent callability/genotyping checks. "
-                         "Descriptive output needs no such flag; missing genotypes are never changed.")
-    if args.test_associations:
+    if args.test_associations and args.reference_genotypes_confirmed:
         try:
             from scipy.stats.contingency import odds_ratio  # noqa: F401
         except ImportError as exc:
@@ -897,12 +997,15 @@ def interpretation_warnings(args, scan_counts: dict) -> list[str]:
                 "GWAS effect allele is NOT automatically the risk allele; effect direction is not interpreted.",
                 "Genotype/phase missingness can bias comparisons; inspect group_phase_qc.tsv before interpretation."]
     if not args.reference_genotypes_confirmed:
-        warnings.append("Reference-call provenance is not confirmed. No inferential association tests were requested/permitted.")
+        warnings.append("Reference-call provenance is not confirmed. Inferential association tests are unavailable until independent callability/genotyping checks are completed.")
     if scan_counts.get("high_quality_homozygous_reference_genotypes", 0) == 0:
         warnings.append("No high-quality 0/0 calls in selected windows: investigate variant-only merging/reference-call absence.")
     if args.test_associations:
         warnings.append("Fisher carrier tests are exploratory, unadjusted for ancestry, age, sex, technical batch or relatedness. "
                         "They require independent participants; no progression, protective or causal claim is supported.")
+        warnings.append("Overall and pairwise p-values use separate Benjamini-Hochberg families across all tested haplotypes and loci. "
+                        "Odds-ratio intervals are conditional exact; carrier-frequency-difference intervals use Newcombe-Wilson scores. "
+                        "All 95% confidence intervals are pointwise, not multiplicity-adjusted.")
     return warnings
 
 
@@ -913,6 +1016,8 @@ def finish_run(args, cohort, selection, loci, out, before, scan_counts, n_tests)
                  for path, stats in before.items())
     warnings = interpretation_warnings(args, scan_counts)
     locus_status_counts = dict(Counter(locus.status for locus in loci))
+    with (out / "haplotype_overall_comparisons.tsv").open() as handle:
+        overall_tests = sum(row["test_status"] == "tested_unadjusted" for row in csv.DictReader(handle, delimiter="\t"))
     summary = dict(
         version=VERSION,
         completed_at_utc=datetime.now(timezone.utc).isoformat(),
@@ -928,6 +1033,10 @@ def finish_run(args, cohort, selection, loci, out, before, scan_counts, n_tests)
         locus_status_counts=locus_status_counts,
         scan_counts=scan_counts,
         haplotype_carrier_tests_performed=n_tests,
+        haplotype_pairwise_tests_performed=n_tests,
+        haplotype_overall_tests_performed=overall_tests,
+        association_tests_requested=bool(args.test_associations),
+        association_tests_permitted=bool(args.test_associations and args.reference_genotypes_confirmed),
         inputs_stable_during_read=stable,
         warnings=warnings,
         input_files={path: {"bytes": stat[0], "mtime_ns": stat[1]} for path, stat in before.items()},

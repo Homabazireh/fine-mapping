@@ -1,0 +1,19 @@
+{
+  "group_counts": {
+    "Prediabetes": 48,
+    "Control": 50,
+    "T2D": 49
+  },
+  "selected_regions": 20,
+  "usable_haplotype_panels": 0,
+  "overall_tests_performed": 0,
+  "pairwise_tests_performed": 0,
+  "significant_pairwise_tests_FDR_005": 0,
+  "candidate_variants_supported_by_cohort_haplotypes": 0,
+  "comparison_available": false,
+  "locus_status_counts": {
+    "lead_below_min_call_rate": 19,
+    "palindromic_lead_orientation_unconfirmed": 1
+  },
+  "high_quality_homozygous_reference_calls": 0
+}

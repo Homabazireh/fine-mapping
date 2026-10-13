@@ -1,52 +1,58 @@
-# Panel c: usable genotypes across 20 regions
+# Panel C and three-group haplotype results
 
-![Panel c: usable lead genotypes in Diabetes, Prediabetes and Control, with pooled counts and a 90 percent threshold](panel_c.png)
+![Panel C: usable lead genotypes in Diabetes, Prediabetes and Control](panel_c.png)
 
-[PNG: 600 dpi](panel_c.png) · [PDF: scalable](panel_c.pdf) · [SVG: editable](panel_c.svg)
+[PNG, 600 dpi](panel_c.png) · [Vector PDF](panel_c.pdf) · [Editable SVG](panel_c.svg)
 
-[Read the plain-language report](REPORT.txt) · [Download the self-contained HTML report](report.html)
+[Full one-figure report](report.html) · [Plain-text results](REPORT.txt) · [Reproduction instructions](../haplotype_comparison.md)
 
-The PNG is **7,800 × 6,240 pixels**. PDF and SVG preserve sharp text and markers
-when enlarged. Only panel c is included in this figure page and its report.
+## Result — 13 October 2026
 
-## What the figure means
+The real cohort contains **49 Diabetes, 48 Prediabetes and 50 Control**
+participants. **No haplotype can currently be identified as differing between
+these groups.** None of the 20 selected regions produced a usable haplotype
+panel, so frequencies, overall/pairwise effects, confidence intervals and
+adjusted p-values are unavailable. No comparisons were performed; this does
+not establish equality or absence of association.
 
-The plot uses **147 real participants: 49 Diabetes, 48 Prediabetes and 50
-Control**. Each row is a selected DNA region's GWAS lead variant, not a person.
-The labels L0001–L0020 follow the public GWAS ranking; chromosome and GRCh38
-position are shown alongside them.
+Panel C retains the existing paper-inspired layout and shows **genotype
+completeness**, not haplotype frequencies. Each row is a GWAS lead variant.
+Colored symbols show usable calls within each group; black diamonds combine
+all participants. The dashed line marks the 90% pooled requirement. The best
+lead has **126/147 usable calls (85.7%)**; all 20 fall below 90%. The main run
+records 19 exclusions for completeness and one for unconfirmed palindromic
+allele orientation. Missing genotypes remain missing.
 
-Colored symbols show the percentage of each group with a usable genotype.
-Black diamonds combine all participants. The counts on the right show usable
-calls out of 147. The dashed line is the **90% pooled completeness requirement**.
-A point further right means more complete genotype data, not greater diabetes
-risk. The highlighted L0010 has the best completeness: **126/147, or 85.7%**.
+No high-quality reference-homozygous calls were observed in the selected
+windows. Reliable joint genotypes including reference calls and phase are
+needed before the intended haplotype comparison can be resolved.
 
-**None of the 20 leads meets 90%.** The completed run produced zero usable
-haplotype panels and zero haplotype association tests. The figure therefore
-cannot establish differences or equivalence between the groups' haplotypes.
-The separate preliminary VCF check was skipped; the main analysis retained
-its recorded genotype and phase requirements. Drawing this figure only reads
-saved result tables and does not rescan the VCF.
+## Tables and causal-evidence audit
 
-The layout is inspired by [Figueroa et al. (2024), Figure 1](https://www.nature.com/articles/s41588-024-01719-5/figures/1).
-All plotted values come from this cohort. This is a genotype-completeness
-figure, not a replication of the paper's founder-haplotype analysis.
+- [Overall comparisons](haplotype_overall_comparisons.tsv) and [pairwise effects, intervals and adjusted p-values](haplotype_comparisons.tsv).
+- [Haplotype frequencies](haplotype_group_frequencies.tsv), [per-region status](comparison_status.tsv), and [machine-readable result counts](comparison_results.json).
+- [20 supplied external GWAS leads](external_gwas_leads.tsv), [legacy fine-mapping audit](legacy_locus_audit.tsv), and [candidate variants](candidate_variants.tsv).
+- [Causal-evidence explanation](VARIANT_EVIDENCE.txt) and [audit provenance and limitations](variant_evidence_audit.json).
+- [Plotted aggregate counts](panel_c_data.tsv) and [figure provenance](panel_c_manifest.json).
+- [Independent R/Python table parity](R_python_parity.json) and [validation and package versions](validation.json).
 
-## Files and reproduction
+Header-only frequency, comparison and candidate tables mean **not estimable or
+not tested**, rather than negative findings. No associated cohort haplotype is
+available for candidate-variant localization. The legacy audit examined 614
+loci: 607 successful fits all lacked reference-homozygous calls in their retained
+LD inputs; 594 contained palindromic variants without recorded orientation
+validation. Legacy PIPs are therefore not presented as validated causal rankings.
+External GWAS signals alone cannot establish group differences in this cohort.
 
-[Plotted aggregate counts](panel_c_data.tsv) · [Provenance and checksums](panel_c_manifest.json)
+## Reproduction and source figure
 
-The full local output is saved at `results/cohort_no_preflight/panel_c/`.
-To regenerate it into a new folder from the project root:
+Use the [Python workflow](../haplotype_comparison.md) or the independent
+[R implementation](../../code/R/README.md). The completed local publication
+comes from `results/haplotype_comparison_20261013/publication_verified/`.
+The repository contains only aggregate exports; detailed participant files
+remain local or in the separate private data repository.
 
-```bash
-.venv/bin/python code/export_panel_c.py \
-  --run-dir results/cohort_no_preflight \
-  --out results/cohort_no_preflight/panel_c_new
-```
-
-This command requires the completed local run's tables. A GitHub clone includes
-the published figure and report, but does not include the raw genomic data,
-participant tables or full local run. See the [analysis guide](../analysis.md)
-and [literature comparison](../../literature_review/figueroa_2024_zfhx3_sca4/review.md).
+Only panel C appears in this report. The PNG is 7,800 × 6,240 pixels; PDF and
+SVG contain the same figure. Layout inspiration:
+[Figueroa et al. (2024), Figure 1](https://www.nature.com/articles/s41588-024-01719-5/figures/1).
+This cohort figure is not a replication of the paper's founder-haplotype study.

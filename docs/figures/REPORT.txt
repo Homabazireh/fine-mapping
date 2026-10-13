@@ -20,7 +20,7 @@ Visual organization inspired by Figueroa et al. (2024), Figure 1. Every plotted 
 
 https://www.nature.com/articles/s41588-024-01719-5/figures/1
 
-Source run completed (UTC): 2026-10-12T17:33:17.719574+00:00. Genome build: GRCh38.
+Source run completed (UTC): 2026-10-13T06:35:19.350288+00:00. Genome build: GRCh38.
 
 FILES
 panel_c.png: PNG · 600 dpi
@@ -29,3 +29,13 @@ panel_c.svg: SVG · editable
 panel_c_data.tsv: Plotted data · TSV
 panel_c_manifest.json: Figure provenance · JSON
 REPORT.txt: Plain-text report
+
+
+HAPLOTYPE GROUP COMPARISONS
+No haplotype can currently be identified as differing between Diabetes, Prediabetes and Control. All selected regions failed the requirements for constructing a usable haplotype panel. Haplotype frequencies, effect sizes, confidence intervals, overall and pairwise p-values, and adjusted p-values are not estimable from this run. Header-only result tables mean not tested, not a null result. The single panel C therefore retains its genotype-completeness meaning; it is not relabeled as a haplotype-frequency figure.
+
+STATISTICAL METHODS
+The following methods are implemented for data that meet the eligibility criteria; this run performed 0 overall and 0 pairwise tests. Use the same phenotype-blind marker panel within each locus. Report chromosome-copy frequencies descriptively. Test participant carrier status using the exact Fisher–Freeman–Halton test across all three groups and two-sided Fisher tests for each pair. Report conditional odds ratios with exact 95% confidence intervals, and carrier-frequency differences (group A minus group B) with Newcombe–Wilson 95% intervals. These intervals are pointwise, not multiplicity-adjusted. Apply Benjamini–Hochberg correction across all tested locus/haplotype hypotheses separately for the overall and pairwise families. These are exploratory unadjusted tests; covariate-adjusted or relatedness-aware effects require a separately validated design. Inference requires verified reference-call provenance, at least 10 resolved participants per group, at least 80% resolved per group, and at least 3 pooled carriers and noncarriers. A positive group-A-minus-group-B difference indicates more carriers in group A.
+
+CANDIDATE CAUSAL VARIANTS
+No associated cohort haplotype is available for candidate-variant localization. The external GWAS lead table describes supplied external association evidence, not causal variants established in these three groups. The legacy SuSiE audit records why its exploratory rankings are not used as validated causal evidence. Resolving candidates requires reliable joint genotypes including reference calls, usable phase, harmonized full regional GWAS summary statistics with sample-size information, suitable ancestry-matched LD, and fine-mapping diagnostics. Functional evidence and independent replication would be needed to strengthen causal interpretation.

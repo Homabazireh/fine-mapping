@@ -1,5 +1,26 @@
 # Fine mapping
 
+## Three-group comparison — 13 October 2026
+
+The updated Python workflow and independent [R implementation](code/R/README.md)
+compare Diabetes, Prediabetes and Control using shared marker panels, overall
+three-group carrier tests, pairwise effects with 95% confidence intervals, and
+separate Benjamini–Hochberg corrections for overall and pairwise tests.
+See the [reproduction instructions](docs/haplotype_comparison.md),
+[single panel C and results](docs/figures/README.md), and
+[agent instructions](AGENTS.md).
+
+**The current data do not resolve which haplotypes differ.** All 20 selected
+regions fail the requirements for usable haplotype panels. Consequently no
+haplotype frequencies, group effects, p-values or causal variants are estimated.
+The one published figure retains its correct meaning: genotype completeness.
+Missing estimates are not evidence that the groups are equal. The evidence
+audit explains why older exploratory fine-mapping results cannot resolve this.
+
+The separate private repository `Homabazireh/fine-mapping-2` stores the project
+data as private release archives. This public repository contains code and
+reviewed aggregate results only.
+
 This project finds regions highlighted by a GWAS, reads nearby variants from
 your VCF, and compares local DNA patterns (**haplotypes**) between participant
 groups. A haplotype is a set of variant alleles carried together on one

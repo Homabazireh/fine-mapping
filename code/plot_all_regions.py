@@ -2,7 +2,8 @@
 """Export every GWAS-selected region as a separate, private marker figure.
 
 Requires a completed all-cluster run of compare_haplotypes.py (--top-loci 0).
-Plots all available PASS biallelic SNPs in each saved lead-centered window,
+Plots all available PASS biallelic SNPs in each saved lead-centered window;
+--include-indels also includes sequence-resolved small biallelic indels.
 including windows whose lead/haplotype panel is unusable. No new inference.
 """
 from __future__ import annotations
@@ -36,6 +37,14 @@ INTERPRETATION_FIELDS = ["locus_id", "chrom", "lead_pos", "start", "end", "haplo
 CAUTION = ("Observed ALT fractions use only called chromosomes and may be biased by missingness and reference-call "
            "ascertainment. ALT is not automatically a risk allele. These unconnected site measurements do not "
            "show phased haplotypes, test group differences, or identify causal variants.")
+
+
+def plot_fields(include_indels=False):
+    return PLOT_FIELDS + (["variant_type"] if include_indels else [])
+
+
+def interpretation_fields(include_indels=False):
+    return INTERPRETATION_FIELDS + (["biallelic_indels", "plotted_variant_count"] if include_indels else [])
 
 
 def fingerprint(path):
@@ -78,8 +87,8 @@ def load_run(run_dir, allow_synthetic=False):
     return summary, leads
 
 
-def validate_variant(block, lead, totals):
-    """Validate both alleles and all groups before exporting count-derived SNP rows."""
+def validate_variant(block, lead, totals, *, include_indels=False, max_indel_length=49):
+    """Validate allele conservation before exporting optional SNP/indel rows."""
     first = block[0]
     definition_keys = ["locus_id", "variant_id", "chrom", "pos", "ref", "alt", "type",
                        "distance_to_lead_bp", "is_exact_lead_match"]
@@ -114,22 +123,28 @@ def validate_variant(block, lead, totals):
     for cell in cells.values():
         if set(cell["copies"]) != set(range(len(alleles))) or sum(cell["copies"].values()) != cell["chromosomes"]:
             raise ValueError("Allele copies do not sum to called chromosomes")
-    biallelic = (first["type"] == "SNP" and len(alleles) == 2 and all(len(a) == 1 and a in "ACGT" for a in alleles))
-    if not biallelic:
+    is_snp = (first["type"] == "SNP" and len(alleles) == 2 and
+              all(len(a) == 1 and a in "ACGT" for a in alleles) and alleles[0] != alleles[1])
+    is_indel = (first["type"].lower() == "indel" and len(alleles) == 2 and
+                all(a and set(a) <= set("ACGT") for a in alleles) and
+                len(alleles[0]) != len(alleles[1]) and max(map(len, alleles)) <= max_indel_length + 1)
+    if not (is_snp or include_indels and is_indel):
         return []
     return [{"locus_id": lead["locus_id"], "variant_id": first["variant_id"], "chrom": first["chrom"],
              "pos": pos, "ref": first["ref"], "alt": first["alt"], "distance_kb": (pos-int(lead["lead_pos"]))/1000,
              "is_exact_lead_match": int(first["is_exact_lead_match"]), "group": group,
              "n_group": totals[group], "n_called": cell["called"], "completeness": cell["called"]/totals[group],
              "alt_copies": cell["copies"][1], "called_chromosomes": cell["chromosomes"],
-             "observed_alt_fraction": cell["copies"][1]/cell["chromosomes"] if cell["chromosomes"] else "NA"}
+             "observed_alt_fraction": cell["copies"][1]/cell["chromosomes"] if cell["chromosomes"] else "NA",
+             **({"variant_type": "SNP" if is_snp else "indel"} if include_indels else {})}
             for group, cell in cells.items()]
 
 
 class PlotWriters:
     """Bound open descriptors while streaming aggregate rows to every region."""
-    def __init__(self, paths, limit=32):
+    def __init__(self, paths, limit=32, include_indels=False):
         self.paths, self.limit, self.opened = paths, limit, OrderedDict()
+        self.fields = plot_fields(include_indels)
 
     def write(self, ident, rows):
         if ident not in self.opened:
@@ -138,7 +153,7 @@ class PlotWriters:
             path = self.paths[ident]
             fresh = not path.exists()
             handle = gzip.open(path, "at", newline="")
-            writer = csv.DictWriter(handle, PLOT_FIELDS, delimiter="\t", lineterminator="\n")
+            writer = csv.DictWriter(handle, self.fields, delimiter="\t", lineterminator="\n")
             if fresh:
                 writer.writeheader()
             self.opened[ident] = handle, writer
@@ -151,7 +166,7 @@ class PlotWriters:
         self.opened.clear()
 
 
-def prepare_plot_data(run_dir, out, summary, leads):
+def prepare_plot_data(run_dir, out, summary, leads, *, include_indels=False):
     totals = {g: int(n) for g, n in summary["group_counts"].items()}
     lead_map = {r["locus_id"]: r for r in leads}
     paths, metadata, seen = {}, {}, {r["locus_id"]: set() for r in leads}
@@ -162,7 +177,9 @@ def prepare_plot_data(run_dir, out, summary, leads):
         paths[ident] = folder / "plot_data.tsv.gz"
         metadata[ident] = {"lead": lead, "folder": folder.name, "biallelic_snps": 0,
                            "other_records_omitted": 0, "omitted_record_types": {}}
-    writers = PlotWriters(paths)
+        if include_indels:
+            metadata[ident].update(include_indels=True, biallelic_indels=0, plotted_variant_count=0)
+    writers = PlotWriters(paths, include_indels=include_indels)
     try:
         with gzip.open(Path(run_dir) / "regional_variant_frequencies.tsv.gz", "rt", newline="") as handle:
             records = csv.DictReader(handle, delimiter="\t")
@@ -173,9 +190,13 @@ def prepare_plot_data(run_dir, out, summary, leads):
                     raise ValueError("Duplicate or non-contiguous regional variant block")
                 seen[ident].add(variant)
                 block = list(block)
-                rows = validate_variant(block, lead_map[ident], totals)
+                rows = validate_variant(block, lead_map[ident], totals, include_indels=include_indels,
+                                        max_indel_length=summary["parameters"].get("max_indel_length", 49))
                 if rows:
-                    metadata[ident]["biallelic_snps"] += 1
+                    kind = "biallelic_indels" if rows[0].get("variant_type") == "indel" else "biallelic_snps"
+                    metadata[ident][kind] += 1
+                    if include_indels:
+                        metadata[ident]["plotted_variant_count"] += 1
                     writers.write(ident, rows)
                 else:
                     metadata[ident]["other_records_omitted"] += 1
@@ -192,6 +213,7 @@ def prepare_plot_data(run_dir, out, summary, leads):
 
 def summarize_region(metadata, rows, summary):
     lead = metadata["lead"]
+    site_label = "SNP/indel" if metadata.get("include_indels") else "SNP"
     records = []
     for group in ordered_groups(summary["group_counts"]):
         cells = [r for r in rows if r["group"] == group]
@@ -203,15 +225,15 @@ def summarize_region(metadata, rows, summary):
         median_call, median_alt = median(completeness) if completeness else "NA", median(alt) if alt else "NA"
         call_text = f"{median_call:.1%}" if median_call != "NA" else "unavailable"
         alt_text = f"{median_alt:.1%}" if median_alt != "NA" else "unavailable"
-        text = (f"{display_group(group)}: {len(cells)} SNP sites; {sum(n > 0 for n in calls)} have usable calls. "
+        text = (f"{display_group(group)}: {len(cells)} {site_label} sites; {sum(n > 0 for n in calls)} have usable calls. "
                 f"Median per-site completeness {call_text}; median ALT-copy fraction among called sites {alt_text}. "
                 "These medians describe sites, not independent participant observations. ")
         if anchor:
-            text += (f"At the exact SNP lead, {anchor['n_called']}/{summary['group_counts'][group]} participants have usable calls; "
+            text += (f"At the exact {anchor.get('variant_type', 'SNP')} lead, {anchor['n_called']}/{summary['group_counts'][group]} participants have usable calls; "
                      f"ALT count is {anchor['alt_copies']}/{anchor['called_chromosomes']} called chromosomes. "
                      + ("Zero called chromosomes means no ALT-fraction estimate. " if int(anchor['called_chromosomes']) == 0 else ""))
         else:
-            text += "No unique exact biallelic SNP lead is available for a lead-specific estimate. "
+            text += f"No unique exact biallelic {site_label} lead is available for a lead-specific estimate. "
         text += CAUTION
         records.append({"locus_id": lead["locus_id"], "chrom": lead["chrom"], "lead_pos": lead["lead_pos"],
             "start": lead["start"], "end": lead["end"], "haplotype_panel_status": lead["status"], "group": group,
@@ -221,6 +243,9 @@ def summarize_region(metadata, rows, summary):
             "median_observed_alt_fraction": median_alt, "lead_n_called": anchor["n_called"] if anchor else "NA",
             "lead_completeness": anchor["completeness"] if anchor else "NA",
             "lead_observed_alt_fraction": anchor["observed_alt_fraction"] if anchor else "NA", "interpretation": text})
+        if metadata.get("include_indels"):
+            records[-1].update(biallelic_indels=metadata["biallelic_indels"],
+                               plotted_variant_count=metadata["plotted_variant_count"])
     return records
 
 
@@ -232,15 +257,19 @@ def render_region(task):
     folder = Path(out) / metadata["folder"]
     rows = read_table(folder / "plot_data.tsv.gz")
     lead = metadata["lead"]
+    include_indels = metadata.get("include_indels", False)
+    site_label = "SNP/indel" if include_indels else "SNP"
+    count_label = (f"{metadata['biallelic_snps']:,} SNPs and {metadata['biallelic_indels']:,} small indels"
+                   if include_indels else f"{metadata['biallelic_snps']:,} SNPs")
     groups = ordered_groups(summary["group_counts"])
     interpretation = summarize_region(metadata, rows, summary)
     fig, axes = plt.subplots(len(groups), 2, figsize=(13, 3.4 + 1.8*len(groups)), squeeze=False, sharex=True, sharey=True)
     fig.subplots_adjust(left=.105, right=.97, top=.76, bottom=.19, wspace=.17, hspace=.38)
     prefix = "SYNTHETIC FIXTURE | " if summary.get("synthetic") else ""
-    fig.text(.055, .956, f"{prefix}{lead['locus_id']} | Regional SNP comparison", fontsize=19, weight="bold", color="#172f46")
+    fig.text(.055, .956, f"{prefix}{lead['locus_id']} | Regional {site_label} comparison", fontsize=19, weight="bold", color="#172f46")
     fig.text(.055, .908, f"{lead['chrom']}:{int(lead['start']):,}–{int(lead['end']):,} | "
              f"{summary['genome_build_user_declared']} | GWAS lead {int(lead['lead_pos']):,}\n"
-             f"All {metadata['biallelic_snps']:,} available biallelic SNPs shown; "
+             f"Available biallelic variants shown: {count_label}; "
              f"{metadata['other_records_omitted']:,} other variant records omitted.\n"
              f"Recorded haplotype-panel status: {lead['status']}", fontsize=10, color="#526579", linespacing=1.6, va="top")
     axes[0, 0].set_title("a   Genotype completeness", loc="left", fontsize=12, pad=24)
@@ -251,15 +280,19 @@ def render_region(task):
         for j, key in enumerate(["completeness", "observed_alt_fraction"]):
             ax = axes[i, j]
             finite = [r for r in cells if r[key] != "NA"]
-            ax.scatter([float(r["distance_kb"]) for r in finite], [100*float(r[key]) for r in finite],
-                       s=8, alpha=.55, color=color, linewidths=0, rasterized=True)
+            for variant_type, marker in (("SNP", "o"), ("indel", "^")):
+                points = [r for r in finite if r.get("variant_type", "SNP") == variant_type]
+                if points:
+                    ax.scatter([float(r["distance_kb"]) for r in points], [100*float(r[key]) for r in points],
+                               s=8 if variant_type == "SNP" else 20, marker=marker, alpha=.55,
+                               color=color, linewidths=0, rasterized=True)
             anchors = [r for r in cells if int(r["is_exact_lead_match"]) == 1]
             if len(anchors) == 1:
                 numerator, denominator = ((anchors[0]["n_called"], summary["group_counts"][group]) if j == 0 else
                                           (anchors[0]["alt_copies"], anchors[0]["called_chromosomes"]))
                 label = f"Lead: {numerator}/{denominator}" if int(denominator) else "Lead ALT fraction: NA (zero calls)"
             else:
-                label = "Lead: no unique exact SNP estimate"
+                label = f"Lead: no unique exact {site_label} estimate"
             ax.text(1, 1.04, label, transform=ax.transAxes, ha="right", fontsize=8, color="#526579")
             if len(anchors) == 1 and anchors[0][key] != "NA":
                 ax.scatter([float(anchors[0]["distance_kb"])], [100*float(anchors[0][key])], marker="D", s=54,
@@ -271,7 +304,7 @@ def render_region(task):
             ax.grid(axis="y", color="#e8edf2", lw=.7)
             ax.spines[["top", "right"]].set_visible(False)
             if not finite:
-                ax.text(.5, .5, "No SNP sites" if not cells else "No called chromosomes; ALT fraction unavailable",
+                ax.text(.5, .5, f"No {site_label} sites" if not cells else "No called chromosomes; ALT fraction unavailable",
                         transform=ax.transAxes, ha="center", va="center", fontsize=9, color="#526579")
             if j == 1:
                 ax.text(.01, .04, f"{sum(int(r['n_called']) == 0 for r in cells)} sites without calls: ALT fraction NA",
@@ -281,9 +314,10 @@ def render_region(task):
     for ax in axes[-1]:
         ax.set_xlabel("Distance from GWAS lead (kb)", fontsize=10, labelpad=9)
     fig.text(.055, .125, "Left: usable participants / all participants in each group. Right: ALT copies / (2 × usable participants).\n"
-             "Every plotted site is a SNP; sites with zero calls have 0% completeness and no ALT-fraction estimate.\n"
+             + ("Circles: SNPs. Triangles: small indels. Colors identify participant groups.\n" if include_indels else
+                "Every plotted site is a SNP; sites with zero calls have 0% completeness and no ALT-fraction estimate.\n") +
              "Missingness and reference-call ascertainment can bias observed fractions. No phase, tested group difference or causal inference.\n"
-             "Dashed line: GWAS lead position. Outlined diamond: unique exact SNP lead when available. ALT is not necessarily a risk allele.",
+             "Dashed line: GWAS lead position. Outlined diamond: unique exact lead when available. ALT is not necessarily a risk allele.",
              fontsize=8.5, color="#526579", va="top", linespacing=1.65)
     for suffix in ("png", "pdf"):
         fig.savefig(folder / f"region.{suffix}", dpi=dpi, facecolor="white")
@@ -294,23 +328,26 @@ def render_region(task):
                      "This region did not yield an eligible haplotype panel under the saved genotype and orientation requirements.")
     note = [f"# {lead['locus_id']}: regional marker interpretation", "",
         f"Window: {lead['chrom']}:{lead['start']}–{lead['end']} ({summary['genome_build_user_declared']}).",
-        f"All {metadata['biallelic_snps']} available biallelic SNPs are included; {metadata['other_records_omitted']} other records are omitted.",
+        f"Available biallelic variants included: {count_label}; {metadata['other_records_omitted']} other records are omitted.",
         "Omitted record classes: " + (", ".join(f"{k}: {v}" for k, v in metadata["omitted_record_types"].items()) or "none") + ".",
         f"Haplotype-panel status from the unchanged analysis: `{lead['status']}`.", "",
         panel_context, "",
         "![Regional marker comparison](region.png)", "", "[Vector PDF](region.pdf) · [Plotted counts](plot_data.tsv.gz)", "",
         *[r["interpretation"] + "\n" for r in interpretation],
-        "A missing or unusable lead never suppresses neighboring SNPs. Markers are individual sites; point spacing represents genomic distance.",
+        f"A missing or unusable lead never suppresses neighboring {site_label} sites. Markers are individual sites; point spacing represents genomic distance.",
+        "Circles are SNPs; triangles are small indels; colors identify participant groups." if include_indels else "Every plotted site is a SNP.",
+        "Zero-call sites have 0% genotype completeness and unavailable ALT fraction. Allele-copy counts describe diploid genotypes, not genomic copy-number variation.",
         "Group medians are unweighted summaries across sites; they are not tests or population allele-frequency estimates.",
         f"Layout inspiration: [Figueroa et al., Figure 1]({PAPER_FIGURE}).", ""]
     (folder / "INTERPRETATION.md").write_text("\n".join(note))
     files = {name: fingerprint(folder / name) for name in ["region.png", "region.pdf", "plot_data.tsv.gz", "INTERPRETATION.md"]}
     return {"locus_id": lead["locus_id"], "folder": metadata["folder"], "biallelic_snps": metadata["biallelic_snps"],
+            **({"biallelic_indels": metadata["biallelic_indels"], "plotted_variant_count": metadata["plotted_variant_count"]} if include_indels else {}),
             "other_records_omitted": metadata["other_records_omitted"], "omitted_record_types": metadata["omitted_record_types"],
             "files": files, "interpretations": interpretation}
 
 
-def export_all_regions(run_dir, out, *, dpi=300, workers=4, allow_synthetic=False):
+def export_all_regions(run_dir, out, *, dpi=300, workers=4, allow_synthetic=False, include_indels=False):
     run, out = Path(run_dir), Path(out)
     summary, leads = load_run(run, allow_synthetic)
     if out.exists() and any(out.iterdir()):
@@ -320,7 +357,7 @@ def export_all_regions(run_dir, out, *, dpi=300, workers=4, allow_synthetic=Fals
     source_paths = [run / name for name in ["run_summary.json", "lead_loci.tsv", "regional_variant_frequencies.tsv.gz"]]
     source_before = {path.name: fingerprint(path) for path in source_paths}
     out.mkdir(parents=True, exist_ok=True)
-    metadata = prepare_plot_data(run, out, summary, leads)
+    metadata = prepare_plot_data(run, out, summary, leads, include_indels=include_indels)
     tasks = [(item, summary, str(out), dpi) for item in metadata]
     results = []
     if workers == 1:
@@ -340,27 +377,33 @@ def export_all_regions(run_dir, out, *, dpi=300, workers=4, allow_synthetic=Fals
     if source_before != {path.name: fingerprint(path) for path in source_paths}:
         raise ValueError("Source analysis changed during export; discard incomplete output")
     with (out / "interpretations.tsv").open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, INTERPRETATION_FIELDS, delimiter="\t", lineterminator="\n")
+        writer = csv.DictWriter(handle, interpretation_fields(include_indels), delimiter="\t", lineterminator="\n")
         writer.writeheader()
         for result in results:
             writer.writerows(result.pop("interpretations"))
     shutil.copyfile(run / "regional_variant_frequencies.tsv.gz", out / "all_regional_variant_frequencies.tsv.gz")
+    classes = "SNPs and sequence-resolved small indels" if include_indels else "SNPs"
     intro = (f"All {len(leads)} GWAS-selected lead-centered windows are included, not only the previous top loci. "
              "Each region has its own picture and explanation. All available PASS biallelic SNPs are plotted, "
              "including regions without usable haplotype panels. Multiallelic SNPs and indels are counted as omissions "
              "and remain available in the complete regional allele-count table. "
              f"The source analysis produced {summary.get('locus_status_counts', {}).get('analysed', 0)} descriptive haplotype panels; "
              "these marker figures do not substitute for the separate haplotype-frequency tables. " + CAUTION)
+    if include_indels:
+        intro = intro.replace("PASS biallelic SNPs", f"PASS biallelic {classes}").replace(
+            "Multiallelic SNPs and indels are counted as omissions", "Multiallelic records are counted as omissions")
+    count_heading = "SNPs / indels" if include_indels else "SNPs"
     md = ["# All-region marker comparisons", "", intro, "", "[Region/group interpretation table](interpretations.tsv)", "",
           "[Complete regional allele-count table, including omitted variant types](all_regional_variant_frequencies.tsv.gz)", "",
-          "| Region | Location | SNPs | Interpretation | PNG | PDF |", "| --- | --- | ---: | --- | --- | --- |"]
+          f"| Region | Location | {count_heading} | Interpretation | PNG | PDF |", "| --- | --- | ---: | --- | --- | --- |"]
     html_rows = []
     for result, lead in zip(results, leads):
         folder = result["folder"]
-        md.append(f"| {lead['locus_id']} | {lead['chrom']}:{lead['start']}–{lead['end']} | {result['biallelic_snps']} | "
+        count_text = (f"{result['biallelic_snps']} / {result['biallelic_indels']}" if include_indels else str(result['biallelic_snps']))
+        md.append(f"| {lead['locus_id']} | {lead['chrom']}:{lead['start']}–{lead['end']} | {count_text} | "
                   f"[Read]({folder}/INTERPRETATION.md) | [PNG]({folder}/region.png) | [PDF]({folder}/region.pdf) |")
         html_rows.append(f"<tr><td>{escape(lead['locus_id'])}</td><td>{escape(lead['chrom'])}:{lead['start']}–{lead['end']}</td>"
-            f"<td>{result['biallelic_snps']}</td><td><a href='{folder}/region.png'>PNG</a> · <a href='{folder}/region.pdf'>PDF</a> · "
+            f"<td>{count_text}</td><td><a href='{folder}/region.png'>PNG</a> · <a href='{folder}/region.pdf'>PDF</a> · "
             f"<a href='{folder}/INTERPRETATION.md'>Interpretation</a></td></tr>")
     (out / "index.md").write_text("\n".join(md) + "\n")
     (out / "index.html").write_text("<!doctype html><meta charset='utf-8'><title>All-region marker comparisons</title>"
@@ -368,7 +411,7 @@ def export_all_regions(run_dir, out, *, dpi=300, workers=4, allow_synthetic=Fals
         "table{border-collapse:collapse;width:100%}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}</style>"
         "<h1>All-region marker comparisons</h1><p>" + escape(intro) + "</p><p><a href='interpretations.tsv'>Interpretation table</a> · "
         "<a href='all_regional_variant_frequencies.tsv.gz'>Complete regional allele-count table</a></p>"
-        "<table><tr><th>Region</th><th>Window</th><th>SNPs</th><th>Files</th></tr>" + "".join(html_rows) + "</table>")
+        f"<table><tr><th>Region</th><th>Window</th><th>{count_heading}</th><th>Files</th></tr>" + "".join(html_rows) + "</table>")
     manifest = {"schema_version": 1, "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "private_results_only": True, "synthetic": bool(summary.get("synthetic", False)), "source_run": run.name,
         "selection": "all_available_GWAS_distance_clusters", "n_regions": len(leads),
@@ -378,6 +421,11 @@ def export_all_regions(run_dir, out, *, dpi=300, workers=4, allow_synthetic=Fals
         "parameters": {k: summary["parameters"].get(k) for k in
                        ["p_threshold", "lead_gap", "top_loci", "flank", "min_dp", "min_gq", "min_call_rate"]},
         "interpretation": CAUTION, "regions": results}
+    if include_indels:
+        manifest.update(schema_version=2, include_indels=True, plotted_variant_classes=["SNP", "indel"],
+                        biallelic_snps=sum(r["biallelic_snps"] for r in results),
+                        biallelic_indels=sum(r["biallelic_indels"] for r in results),
+                        plotted_variant_count=sum(r["plotted_variant_count"] for r in results))
     manifest["index_files"] = {name: fingerprint(out / name) for name in
                                ["interpretations.tsv", "index.md", "index.html", "all_regional_variant_frequencies.tsv.gz"]}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
@@ -392,8 +440,10 @@ def main():
     parser.add_argument("--dpi", type=int, default=300)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--allow-synthetic", action="store_true")
+    parser.add_argument("--include-indels", action="store_true", help="Also plot saved biallelic sequence-resolved small indels")
     args = parser.parse_args()
-    export_all_regions(args.run_dir, args.out, dpi=args.dpi, workers=args.workers, allow_synthetic=args.allow_synthetic)
+    export_all_regions(args.run_dir, args.out, dpi=args.dpi, workers=args.workers,
+                       allow_synthetic=args.allow_synthetic, include_indels=args.include_indels)
 
 
 if __name__ == "__main__":

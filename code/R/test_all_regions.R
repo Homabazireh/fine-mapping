@@ -41,6 +41,32 @@ assert(is.na(regional_plot_data(not_lead, lead, groups)$interpretation[[1]]$lead
 multi <- records; multi$alt <- "G,T"
 excluded <- regional_plot_data(multi, lead, groups)
 assert(length(excluded$rows) == 0 && excluded$interpretation[[1]]$other_records_omitted == 3, "Multiallelic SNPs treated as biallelic")
+indel <- records[records$pos == "120", , drop = FALSE]
+indel$alt <- "AT"; indel$type <- "indel"; indel$variant_id <- "chr1:120:A:AT"
+indel$allele[indel$allele_index == "1"] <- "AT"
+combined <- rbind(records[records$pos != "120", , drop = FALSE], indel)
+assert(length(regional_plot_data(combined, lead, groups)$rows) == 6L, "Default SNP-only behavior changed")
+with_indels <- regional_plot_data(combined, lead, groups, include_indels = TRUE)
+assert(length(with_indels$rows) == 9L && with_indels$interpretation[[1]]$biallelic_snps == 2L &&
+       with_indels$interpretation[[1]]$biallelic_indels == 1L && with_indels$interpretation[[1]]$plotted_variant_count == 3L,
+       "Indel-inclusive class counts are wrong")
+indel_rows <- Filter(function(r) r$variant_type == "indel", with_indels$rows)
+assert(length(indel_rows) == 3L && all(vapply(indel_rows, function(r) r$completeness == 0 && is.na(r$observed_alt_fraction), logical(1))),
+       "Uncalled indel became a reference genotype or zero ALT fraction")
+deletion <- indel; deletion$ref <- "AT"; deletion$alt <- "A"; deletion$variant_id <- "chr1:120:AT:A"
+deletion$allele <- ifelse(deletion$allele_index == "0", "AT", "A")
+assert(length(regional_plot_data(deletion, lead, groups, include_indels = TRUE)$rows) == 3L, "Sequence deletion excluded")
+bad <- deletion; bad$allele_copies[1] <- "99"
+assert(inherits(try(regional_plot_data(bad, lead, groups, include_indels = TRUE), silent = TRUE), "try-error"), "Indel allele conservation bypassed")
+for (sequence in c(paste(rep("A", 51), collapse = ""), "<DEL>", "AN", "G")) {
+  bad <- indel; bad$alt <- sequence; bad$allele[bad$allele_index == "1"] <- sequence
+  assert(length(regional_plot_data(bad, lead, groups, include_indels = TRUE)$rows) == 0L, "Non-small/nonsequence/non-length-changing allele admitted as indel")
+}
+long <- indel; long$alt <- paste(rep("A", 50), collapse = ""); long$allele[long$allele_index == "1"] <- long$alt[1]
+assert(length(regional_plot_data(long, lead, groups, include_indels = TRUE)$rows) == 3L, "Maximum allowed stored indel sequence excluded")
+assert(length(regional_plot_data(long, lead, groups, include_indels = TRUE, max_indel_length = 1L)$rows) == 0L, "Source indel length limit ignored")
+mixed <- records; mixed$alt <- "G,AT"; mixed$type <- "SNP/indel"
+assert(length(regional_plot_data(mixed, lead, groups, include_indels = TRUE)$rows) == 0L, "Mixed multiallelic site collapsed to one ALT")
 folder <- tempfile("native_R_allregions_test_"); dir.create(folder)
 run <- file.path(folder, "run"); dir.create(run)
 lead2 <- lead; lead2$locus_id <- "L0002"; lead2$lead_pos <- "300"; lead2$start <- "250"; lead2$end <- "350"
@@ -58,6 +84,17 @@ assert(isTRUE(redrawn$saved_plot_data_unchanged) && length(redrawn$regions) == 2
 original_data <- file.path(folder, "figures", "L0001_chr1_100", "plot_data.tsv.gz")
 redrawn_data <- file.path(folder, "redrawn", "L0001_chr1_100", "plot_data.tsv.gz")
 assert(identical(unname(tools::md5sum(original_data)), unname(tools::md5sum(redrawn_data))), "Graphics-only redraw changed numerical data")
+indel_run <- file.path(folder, "indel_run"); dir.create(indel_run)
+file.copy(file.path(run, c("run_summary.json", "lead_loci.tsv", "COMPLETED.txt")), indel_run)
+combined_rows <- lapply(seq_len(nrow(combined)), function(i) as.list(combined[i, ]))
+write_rows(file.path(indel_run, "regional_variant_frequencies.tsv.gz"), combined_rows, REGIONAL_FIELDS)
+indel_manifest <- render_all_regions(indel_run, file.path(folder, "with_indels"), include_indels = TRUE)
+assert(isTRUE(indel_manifest$include_indels) && indel_manifest$biallelic_snps == 2L && indel_manifest$biallelic_indels == 1L &&
+       indel_manifest$plotted_variant_count == 3L, "Export lost SNP/indel metadata")
+indel_data <- read_tsv(file.path(folder, "with_indels", "L0001_chr1_100", "plot_data.tsv.gz"))
+assert(identical(names(indel_data), regional_plot_fields(TRUE)) && setequal(indel_data$variant_type, c("SNP", "indel")), "Export lost variant class")
+indel_redrawn <- replot_all_regions(indel_run, file.path(folder, "with_indels"), file.path(folder, "indels_redrawn"), workers = 2L)
+assert(isTRUE(indel_redrawn$saved_plot_data_unchanged) && isTRUE(indel_redrawn$include_indels), "Indel redraw lost saved class schema")
 summary$distance_clusters_available <- 3L
 jsonlite::write_json(summary, file.path(run, "run_summary.json"), auto_unbox = TRUE)
 assert(inherits(try(render_all_regions(run, file.path(folder, "wrong_scope")), silent = TRUE), "try-error"), "Subset accepted as all regions")

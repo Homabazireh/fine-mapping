@@ -1,12 +1,12 @@
 # Fine mapping — reproducible analysis code
 
-Compare local haplotypes across Diabetes, Prediabetes and Control using a shared, phenotype-blind marker panel. Python and independent R workflows prepare data, apply genotype and phase checks, calculate eligible group comparisons, and draw the requested figures.
+Compare local SNP/small-indel haplotypes across Diabetes, Prediabetes and Control using a shared, phenotype-blind marker panel. Python and independent R workflows prepare data, apply genotype and phase checks, calculate eligible group comparisons, and draw the requested figures. Allele-copy counts refer to diploid genotypes; this is not a copy-number-variation caller.
 
 This public repository contains code, tests and methodological documentation only. All cohort data, results, figures and interpretations belong in the [private fine-mapping-2 repository](https://github.com/Homabazireh/fine-mapping-2). Access to that repository is required to view or restore them. Removing outputs here does not remove their earlier public Git history.
 
 ## Reproduce an analysis
 
-Use Python 3.10+ and R 4.3+ with `jsonlite`; install `bcftools` for the R VCF reader. Supply the inputs documented in [data/raw/README.md](data/raw/README.md), or restore the private release according to its `PRIVATE_DATA.md`.
+Use Python 3.10+ and R 4.3+ with `jsonlite`; install `bcftools` for the R VCF reader. External LD preparation additionally uses NumPy, and external fine-mapping requires the R packages `susieR`, `jsonlite` and `openssl`. Supply the inputs documented in [data/raw/README.md](data/raw/README.md), or restore the private release according to its `PRIVATE_DATA.md`.
 
 The tested Python 3.14 package versions are pinned in [requirements-analysis.lock.txt](requirements-analysis.lock.txt). Use that file instead of the minimum-version requirements when recreating the same software environment.
 
@@ -30,6 +30,8 @@ python3 -m venv .venv
 Only declare `--reference-genotypes-confirmed` or `--gwas-alleles-forward-confirmed` after verifying the corresponding evidence. A request for association tests does not bypass eligibility checks. Use `--top-loci 0` to analyze every GWAS-selected region rather than the default subset; preserve a new output folder for each run.
 
 [Analysis instructions](docs/analysis.md) describe inputs, all-region plots and reports. [Statistical methods](docs/haplotype_comparison.md) explain effect sizes and uncertainty. [R instructions](code/R/README.md) provide the independent implementation and parity checks. [The revised task](docs/request.md) records the requested scope.
+
+For regional SNP **and indel** pictures from an existing all-region run, add `--include-indels` to either regional plotter. The default retains the earlier SNP-only format. The separate [external fine-mapping workflow](docs/external_finemapping.md) extracts full regional summary statistics, acquires public reference LD, checks allele alignment, and fits exploratory SuSiE-RSS models. It does not repair unavailable cohort genotype calls or carrier associations.
 
 ## Validation
 

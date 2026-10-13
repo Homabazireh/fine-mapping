@@ -6,20 +6,25 @@ if (!exists("read_tsv", mode = "function")) source(file.path(dirname(normalizePa
 
 REGION_PLOT_FIELDS <- strsplit("locus_id variant_id chrom pos ref alt distance_kb is_exact_lead_match group n_group n_called completeness alt_copies called_chromosomes observed_alt_fraction", " ")[[1]]
 REGION_INTERPRETATION_FIELDS <- strsplit("locus_id chrom lead_pos start end haplotype_panel_status group n_group biallelic_snps other_records_omitted sites_with_calls sites_without_calls median_completeness median_observed_alt_fraction lead_n_called lead_completeness lead_observed_alt_fraction interpretation", " ")[[1]]
+regional_plot_fields <- function(include_indels = FALSE) c(REGION_PLOT_FIELDS, if (include_indels) "variant_type")
+regional_interpretation_fields <- function(include_indels = FALSE) c(REGION_INTERPRETATION_FIELDS, if (include_indels) c("biallelic_indels", "plotted_variant_count"))
 
-regional_plot_data <- function(records, lead, group_counts) {
+regional_plot_data <- function(records, lead, group_counts, include_indels = FALSE, max_indel_length = 49L) {
   if (!all(REGIONAL_FIELDS %in% names(records))) stop("Regional table is missing required columns.")
   if (nrow(records) && any(records$locus_id != lead$locus_id)) stop("Locus contains records assigned elsewhere.")
   groups <- names(group_counts)
   if (nrow(records) && any(!records$group %in% groups)) stop("Unknown regional group.")
   is_snp <- records$type == "SNP" & nchar(records$ref) == 1L & nchar(records$alt) == 1L &
-    grepl("^[ACGT]$", records$ref) & grepl("^[ACGT]$", records$alt)
-  omitted <- length(unique(records$variant_id[!is_snp]))
-  excluded_records <- unique(records[!is_snp, c("variant_id", "type"), drop = FALSE])
+    grepl("^[ACGT]$", records$ref) & grepl("^[ACGT]$", records$alt) & records$ref != records$alt
+  is_indel <- tolower(records$type) == "indel" & grepl("^[ACGT]+$", records$ref) & grepl("^[ACGT]+$", records$alt) &
+    nchar(records$ref) != nchar(records$alt) & pmax(nchar(records$ref), nchar(records$alt)) <= max_indel_length + 1L
+  included <- is_snp | (include_indels & is_indel)
+  omitted <- length(unique(records$variant_id[!included]))
+  excluded_records <- unique(records[!included, c("variant_id", "type"), drop = FALSE])
   omitted_types <- excluded_records$type
   omitted_types[omitted_types == "SNP"] <- "multiallelic_SNP"
   omitted_types <- as.list(table(omitted_types))
-  sites <- records[is_snp, , drop = FALSE]
+  sites <- records[included, , drop = FALSE]
   rows <- list()
   if (nrow(sites)) {
     for (field in c("pos", "distance_to_lead_bp", "n_group", "n_called", "allele_index", "allele_copies", "called_chromosomes", "is_exact_lead_match")) {
@@ -32,6 +37,7 @@ regional_plot_data <- function(records, lead, group_counts) {
     by_variant <- split(seq_len(nrow(sites)), sites$variant_id)
     for (variant in variant_ids) {
       record <- sites[by_variant[[variant]], , drop = FALSE]
+      if (length(unique(record$type)) != 1L) stop("Conflicting variant classes.")
       if (length(unique(paste(record$chrom, record$pos, record$ref, record$alt))) != 1L) stop("Conflicting variant coordinates or alleles.")
       if (length(unique(record$is_exact_lead_match)) != 1L || !record$is_exact_lead_match[1] %in% c(0, 1)) stop("Lead flag must agree across all groups.")
       if (record$is_exact_lead_match[1] == 1 && record$pos[1] != as.numeric(lead$lead_pos)) stop("Exact lead flag at the wrong coordinate.")
@@ -50,6 +56,7 @@ regional_plot_data <- function(records, lead, group_counts) {
           is_exact_lead_match = alt$is_exact_lead_match, group = g, n_group = total, n_called = called,
           completeness = called/total, alt_copies = alt$allele_copies, called_chromosomes = 2*called,
           observed_alt_fraction = if (called) alt$allele_copies/(2*called) else NA_real_)
+        if (include_indels) rows[[length(rows)]]$variant_type <- if (alt$type == "SNP") "SNP" else "indel"
       }
     }
     order_rows <- order(vapply(rows, `[[`, numeric(1), "pos"), vapply(rows, `[[`, character(1), "variant_id"),
@@ -64,11 +71,13 @@ regional_plot_data <- function(records, lead, group_counts) {
     matched <- Filter(function(r) r$is_exact_lead_match == 1, selected)
     exact <- if (length(matched) == 1L) matched[[1]] else NULL
     nsites <- length(selected)
-    interpretation <- if (!nsites) "No biallelic SNP records are available in this window; regional frequencies are unavailable." else
+    site_label <- if (include_indels) "SNP/indel" else "SNP"
+    interpretation <- if (!nsites) paste0("No biallelic ", site_label, " records are available in this window; regional frequencies are unavailable.") else
       paste0("Completeness is called participants divided by group size. ALT fractions condition on called chromosomes; missing calls are not reference calls. ",
-             "These descriptive SNP patterns do not establish haplotype differences, cohort associations or causal variants.")
-    list(locus_id = lead$locus_id, chrom = lead$chrom, lead_pos = lead$lead_pos, start = lead$start, end = lead$end,
-      haplotype_panel_status = lead$status, group = g, n_group = group_counts[[g]], biallelic_snps = nsites,
+             "These descriptive ", site_label, " patterns do not establish haplotype differences, cohort associations or causal variants.")
+    nindel <- if (include_indels) sum(vapply(selected, function(r) identical(r$variant_type, "indel"), logical(1))) else 0L
+    result <- list(locus_id = lead$locus_id, chrom = lead$chrom, lead_pos = lead$lead_pos, start = lead$start, end = lead$end,
+      haplotype_panel_status = lead$status, group = g, n_group = group_counts[[g]], biallelic_snps = nsites - nindel,
       other_records_omitted = omitted, sites_with_calls = sum(called > 0), sites_without_calls = sum(called == 0),
       median_completeness = if (nsites) median(completeness) else NA_real_,
       median_observed_alt_fraction = if (any(is.finite(alt))) median(alt[is.finite(alt)]) else NA_real_,
@@ -76,11 +85,15 @@ regional_plot_data <- function(records, lead, group_counts) {
       lead_completeness = if (is.null(exact)) NA_real_ else exact$completeness,
       lead_observed_alt_fraction = if (is.null(exact)) NA_real_ else exact$observed_alt_fraction,
       interpretation = interpretation)
+    if (include_indels) result <- c(result, list(biallelic_indels = nindel, plotted_variant_count = nsites))
+    result
   })
-  list(rows = rows, interpretation = stats, omitted_record_types = omitted_types)
+  list(rows = rows, interpretation = stats, omitted_record_types = omitted_types, include_indels = include_indels)
 }
 
 draw_all_region <- function(data, lead, summary, path, type = "png") {
+  include_indels <- isTRUE(data$include_indels)
+  site_label <- if (include_indels) "SNP/indel" else "SNP"
   groups <- names(summary$group_counts)
   groups <- groups[order(match(display_group(groups), c("Diabetes", "Prediabetes", "Control")), groups)]
   colors <- c(Diabetes = "#c66a32", Prediabetes = "#218d88", Control = "#3569a1")
@@ -107,26 +120,34 @@ draw_all_region <- function(data, lead, summary, path, type = "png") {
       box(bty = "l", col = "#c8d1db")
       if (length(x)) {
         valid <- is.finite(y)
-        points(x[valid], y[valid], pch = 16, cex = .28, col = adjustcolor(color, alpha.f = .6))
+        indel <- vapply(rows, function(r) identical(r$variant_type, "indel"), logical(1))
+        points(x[valid & !indel], y[valid & !indel], pch = 16, cex = .28, col = adjustcolor(color, alpha.f = .6))
+        points(x[valid & indel], y[valid & indel], pch = 17, cex = .48, col = adjustcolor(color, alpha.f = .6))
         exact <- vapply(rows, function(r) r$is_exact_lead_match == 1, logical(1)) & valid
         if (sum(exact) == 1) points(x[exact], y[exact], pch = 23, bg = color, col = "#233445", cex = 1.1)
-        mtext(sprintf("%d/%d SNPs have a plotted estimate", sum(valid), length(x)), side = 3, adj = 1, line = .1, cex = .62, col = "#63758a")
-      } else text(mean(xlim), 50, "No biallelic SNP records\nin this window", cex = .9, col = "#63758a")
+        mtext(sprintf("%d/%d %s sites have a plotted estimate", sum(valid), length(x), site_label), side = 3, adj = 1, line = .1, cex = .62, col = "#63758a")
+      } else text(mean(xlim), 50, paste0("No biallelic ", site_label, " records\nin this window"), cex = .9, col = "#63758a")
     }
   }
   main <- paste0(lead$locus_id, "  ", lead$chrom, ":", format(as.numeric(lead$start), big.mark = ",", scientific = FALSE, trim = TRUE),
-                 "-", format(as.numeric(lead$end), big.mark = ",", scientific = FALSE, trim = TRUE), " | All available regional SNPs")
+                 "-", format(as.numeric(lead$end), big.mark = ",", scientific = FALSE, trim = TRUE), " | Regional ", site_label, " sites")
   if (isTRUE(summary$synthetic)) main <- paste("SYNTHETIC FIXTURE |", main)
   mtext(main, side = 3, outer = TRUE, line = 3.6, adj = .03, font = 2, cex = 1.18, col = "#172f46")
   mtext(paste0("Lead ", lead$chrom, ":", lead$lead_pos, " | Panel status: ", gsub("_", " ", lead$status, fixed = TRUE)),
         side = 3, outer = TRUE, line = 2, adj = .03, cex = .78, col = "#526579")
-  mtext("Every available PASS biallelic SNP is included; regional plots do not require an eligible lead haplotype panel.",
+  coverage <- if (include_indels) {
+    classes <- lapply(c("SNP", "indel"), function(kind) unique(vapply(Filter(function(r) identical(r$variant_type, kind), data$rows), `[[`, character(1), "variant_id")))
+    sprintf("Available PASS biallelic sites: %d SNPs + %d small indels; an eligible lead haplotype panel is not required.", length(classes[[1]]), length(classes[[2]]))
+  } else "Available PASS biallelic SNP sites; regional plots do not require an eligible lead haplotype panel."
+  mtext(coverage,
         side = 3, outer = TRUE, line = .5, adj = .03, cex = .73, col = "#526579")
-  mtext("Dots: individual SNPs. Diamond: unique exact lead, when available. Vertical line: selected lead position.",
+  mtext(if (include_indels) "Circles: SNPs. Triangles: small indels. Colors: participant groups. Diamond: unique exact lead. Line: lead position." else
+        "Dots: individual SNPs. Diamond: unique exact lead, when available. Vertical line: selected lead position.",
         side = 1, outer = TRUE, line = 1.1, adj = .03, cex = .73, col = "#526579")
   mtext("ALT fractions are conditional on called chromosomes; missing calls remain missing and can bias apparent group differences.",
         side = 1, outer = TRUE, line = 2.6, adj = .03, cex = .73, col = "#526579")
-  mtext("Descriptive SNP patterns do not identify haplotype associations or causal variants. Non-SNP/multiallelic records are omitted.",
+  mtext(if (include_indels) "Descriptive SNP/indel patterns do not identify associations or causal variants. Multiallelic records remain in the full table." else
+        "Descriptive SNP patterns do not identify haplotype associations or causal variants. Non-SNP/multiallelic records are omitted.",
         side = 1, outer = TRUE, line = 4.1, adj = .03, cex = .73, col = "#526579")
 }
 
@@ -156,12 +177,14 @@ split_regional_stream <- function(path, leads, folder) {
   }
 }
 
-render_all_regions <- function(run_dir, out) {
+render_all_regions <- function(run_dir, out, include_indels = FALSE) {
   if (!file.exists(file.path(run_dir, "COMPLETED.txt"))) stop("A completed all-cluster analysis is required.")
   if (dir.exists(out) && length(list.files(out, all.files = TRUE, no.. = TRUE))) stop("Use a new or empty regional output directory.")
   input_paths <- file.path(run_dir, c("run_summary.json", "lead_loci.tsv", "regional_variant_frequencies.tsv.gz"))
   before <- tools::md5sum(input_paths)
   summary <- jsonlite::fromJSON(file.path(run_dir, "run_summary.json"), simplifyVector = FALSE)
+  max_indel_length <- summary$parameters$max_indel_length
+  if (is.null(max_indel_length)) max_indel_length <- 49L
   if (!isTRUE(summary$inputs_stable_during_read)) stop("The source analysis did not verify stable inputs.")
   leads <- read_tsv(file.path(run_dir, "lead_loci.tsv"))
   if (anyDuplicated(leads$locus_id) || any(!grepl("^L[0-9]+$", leads$locus_id))) stop("Invalid or duplicate locus IDs.")
@@ -176,49 +199,70 @@ render_all_regions <- function(run_dir, out) {
   for (i in seq_len(nrow(leads))) {
     lead <- as.list(leads[i, ]); path <- file.path(spool, paste0(lead$locus_id, ".tsv"))
     records <- if (file.exists(path)) read_tsv(path) else as.data.frame(setNames(rep(list(character()), length(REGIONAL_FIELDS)), REGIONAL_FIELDS))
-    data <- regional_plot_data(records, lead, summary$group_counts)
+    data <- regional_plot_data(records, lead, summary$group_counts, include_indels, max_indel_length)
     name <- paste(lead$locus_id, lead$chrom, lead$lead_pos, sep = "_")
     if (!grepl("^[A-Za-z0-9_.-]+$", name)) stop("Unsafe region folder name.")
     folder <- file.path(out, name); dir.create(folder)
-    write_rows(file.path(folder, "plot_data.tsv.gz"), data$rows, REGION_PLOT_FIELDS)
+    write_rows(file.path(folder, "plot_data.tsv.gz"), data$rows, regional_plot_fields(include_indels))
     for (type in c("png", "pdf")) draw_all_region(data, lead, summary, file.path(folder, paste0("region.", type)), type)
     text <- c(paste0("# ", lead$locus_id, ": ", lead$chrom, ":", lead$start, "-", lead$end), "",
       paste("Haplotype panel status:", lead$status), "", "![Regional SNP completeness and observed ALT fractions](region.png)", "",
       "All available PASS biallelic SNPs in the window are shown, including regions whose lead fails haplotype QC.", "",
       vapply(data$interpretation, function(r) {
         percent <- function(value) if (is.na(value)) "unavailable" else sprintf("%.1f%%", value*100)
-        paste0(display_group(r$group), ": ", r$biallelic_snps, " SNPs; ", r$sites_with_calls,
+        paste0(display_group(r$group), ": ", r$biallelic_snps, " SNPs", if (include_indels) paste0(" + ", r$biallelic_indels, " indels"), "; ", r$sites_with_calls,
           " have called genotypes; ", r$sites_without_calls, " have no called genotypes. Median completeness: ", percent(r$median_completeness),
           "; median observed ALT fraction among sites with calls: ", percent(r$median_observed_alt_fraction), ". ", r$interpretation)
       }, character(1)), "", paste("Omitted plotted record types:", json(data$omitted_record_types)),
       "All omitted record types remain in the complete aggregate variant table linked from the global index.", "",
       "A high observed ALT fraction can reflect missing reference calls; it is not evidence that the cohort carries only alternate alleles.",
       "These plots do not test group associations and cannot identify causal variants. Subject-level phase and independent evidence remain necessary.")
+    if (include_indels) {
+      text <- gsub("All available PASS biallelic SNPs", "All available PASS biallelic SNPs and sequence-resolved small indels", text, fixed = TRUE)
+      text <- gsub("Regional SNP completeness", "Regional SNP/indel completeness", text, fixed = TRUE)
+      text <- c(text, "Circles show SNPs; triangles show small indels; colors identify participant groups. Allele-copy counts describe diploid genotypes, not genomic copy-number variation.")
+    }
     writeLines(text, file.path(folder, "INTERPRETATION.md"))
     interpretations <- c(interpretations, data$interpretation)
     manifest_rows[[i]] <- list(locus_id = lead$locus_id, chrom = lead$chrom, lead_pos = lead$lead_pos,
       directory = name, biallelic_snps = data$interpretation[[1]]$biallelic_snps, other_records_omitted = data$interpretation[[1]]$other_records_omitted,
       omitted_record_types = data$omitted_record_types,
       files = list(png = paste0(name, "/region.png"), pdf = paste0(name, "/region.pdf"), data = paste0(name, "/plot_data.tsv.gz"), interpretation = paste0(name, "/INTERPRETATION.md")))
+    if (include_indels) manifest_rows[[i]] <- c(manifest_rows[[i]], list(
+      biallelic_indels = data$interpretation[[1]]$biallelic_indels,
+      plotted_variant_count = data$interpretation[[1]]$plotted_variant_count))
     if (i %% 25L == 0L || i == nrow(leads)) cat("Independent R regional figures: ", i, "/", nrow(leads), "\n", sep = "")
   }
-  write_rows(file.path(out, "interpretations.tsv"), interpretations, REGION_INTERPRETATION_FIELDS)
+  write_rows(file.path(out, "interpretations.tsv"), interpretations, regional_interpretation_fields(include_indels))
+  count_text <- function(r) paste0(r$biallelic_snps, if (include_indels) paste0(" / ", r$biallelic_indels))
   index <- c("# All regional SNP figures", "", "Private project outputs. Each region has a separate PNG, PDF, full plotting table and interpretation.", "",
     "All GWAS clusters are represented, including those with unavailable haplotypes or no available biallelic SNPs.", "",
     "ALT fractions use only called chromosomes; no missing genotype is converted to a reference call. These pictures do not establish haplotype or causal associations.", "",
     "[Full aggregate variant table, including omitted indels and multiallelic sites](all_regional_variant_frequencies.tsv.gz)", "",
     "| Region | Window lead | SNPs | Interpretation | PNG | PDF |", "| --- | --- | ---: | --- | --- | --- |",
-    vapply(manifest_rows, function(r) paste0("| ", r$locus_id, " | ", r$chrom, ":", r$lead_pos, " | ", r$biallelic_snps,
+    vapply(manifest_rows, function(r) paste0("| ", r$locus_id, " | ", r$chrom, ":", r$lead_pos, " | ", count_text(r),
       " | [Read](", r$files$interpretation, ") | [PNG](", r$files$png, ") | [PDF](", r$files$pdf, ") |"), character(1)))
+  if (include_indels) {
+    index <- gsub("regional SNP figures", "regional SNP/indel figures", index, fixed = TRUE)
+    index <- gsub("biallelic SNPs", "biallelic SNPs/indels", index, fixed = TRUE)
+    index <- gsub("including omitted indels and multiallelic sites", "including omitted multiallelic sites", index, fixed = TRUE)
+    index <- gsub("| SNPs |", "| SNPs / indels |", index, fixed = TRUE)
+  }
   writeLines(index, file.path(out, "index.md"))
   html <- c("<!doctype html><html lang='en'><meta charset='utf-8'><title>Private regional SNP figures</title>",
     "<style>body{font:16px sans-serif;max-width:1100px;margin:3rem auto;color:#233445}table{border-collapse:collapse;width:100%}td,th{padding:.5rem;border-bottom:1px solid #ddd;text-align:left}</style>",
     "<h1>All regional SNP figures</h1><p>Private outputs. Each region contains all available biallelic SNPs, irrespective of lead eligibility. ALT fractions condition on called chromosomes; these descriptive pictures do not establish haplotype associations or causal variants.</p>",
     "<p><a href='all_regional_variant_frequencies.tsv.gz'>Full aggregate variant table, including omitted indels and multiallelic records</a></p>",
     "<table><tr><th>Region</th><th>Lead</th><th>SNPs</th><th>Files</th></tr>",
-    vapply(manifest_rows, function(r) paste0("<tr><td>", r$locus_id, "</td><td>", r$chrom, ":", r$lead_pos, "</td><td>", r$biallelic_snps,
+    vapply(manifest_rows, function(r) paste0("<tr><td>", r$locus_id, "</td><td>", r$chrom, ":", r$lead_pos, "</td><td>", count_text(r),
       "</td><td><a href='", r$files$png, "'>PNG</a> &middot; <a href='", r$files$pdf, "'>PDF</a> &middot; <a href='", r$files$interpretation,
       "'>Interpretation</a> &middot; <a href='", r$files$data, "'>Data</a></td></tr>"), character(1)), "</table></html>")
+  if (include_indels) {
+    html <- gsub("regional SNP figures", "regional SNP/indel figures", html, fixed = TRUE)
+    html <- gsub("biallelic SNPs", "biallelic SNPs/indels", html, fixed = TRUE)
+    html <- gsub("including omitted indels and multiallelic records", "including omitted multiallelic records", html, fixed = TRUE)
+    html <- gsub("<th>SNPs</th>", "<th>SNPs / indels</th>", html, fixed = TRUE)
+  }
   writeLines(html, file.path(out, "index.html"))
   if (!identical(before, tools::md5sum(input_paths))) stop("An aggregate input changed during plotting; discard these outputs.")
   manifest <- list(implementation = "independent_R", created_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
@@ -227,13 +271,24 @@ render_all_regions <- function(run_dir, out) {
     full_regional_variant_table = "all_regional_variant_frequencies.tsv.gz", input_md5 = as.list(setNames(unname(before), basename(input_paths))),
     input_source = if (identical(summary$implementation, "independent_R")) "independent_R_aggregate_run" else "Python_aggregate_run_independent_R_validation_and_plotting",
     versions = list(R = R.version.string, jsonlite = as.character(packageVersion("jsonlite"))), regions = manifest_rows)
+  if (include_indels) {
+    manifest$include_indels <- TRUE
+    manifest$plotted_variant_classes <- c("SNP", "indel")
+    manifest$estimates <- "SNP/indel completeness and ALT fraction conditional on called chromosomes; no inference"
+    for (field in c("biallelic_snps", "biallelic_indels", "plotted_variant_count"))
+      manifest[[field]] <- sum(vapply(manifest_rows, `[[`, numeric(1), field))
+  }
   jsonlite::write_json(manifest, file.path(out, "manifest.json"), pretty = TRUE, auto_unbox = TRUE, null = "null", na = "null")
   invisible(manifest)
 }
 
 if (sys.nframe() == 0L) {
   argv <- commandArgs(TRUE)
-  if (length(argv) != 4L || !setequal(argv[c(1, 3)], c("--run-dir", "--out"))) stop("Use: Rscript code/R/plot_all_regions.R --run-dir COMPLETED_ALL_CLUSTER_RUN --out NEW_DIRECTORY")
+  include_indels <- "--include-indels" %in% argv
+  if (sum(argv == "--include-indels") > 1L) stop("Duplicate --include-indels option")
+  argv <- argv[argv != "--include-indels"]
+  if (length(argv) != 4L || !setequal(argv[c(1, 3)], c("--run-dir", "--out"))) stop("Use: Rscript code/R/plot_all_regions.R --run-dir COMPLETED_ALL_CLUSTER_RUN --out NEW_DIRECTORY [--include-indels]")
   args <- as.list(argv[c(2, 4)]); names(args) <- gsub("-", "_", sub("^--", "", argv[c(1, 3)]))
+  args$include_indels <- include_indels
   do.call(render_all_regions, args)
 }

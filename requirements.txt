@@ -1,4 +1,5 @@
-# The descriptive analysis itself uses only the Python >=3.10 standard library.
-# These packages enable optional association tests and plots.
+# Python >=3.10. The cohort VCF reader and external GWAS extractor use the standard library.
+# NumPy is required for external LD preparation; SciPy and matplotlib support tests/plots.
+numpy>=1.23.5
 scipy>=1.10
 matplotlib>=3.6

@@ -104,7 +104,8 @@ aggregate run:
 Rscript code/R/compare_haplotypes.R --genome-build GRCh38 \
   --top-loci 0 --test-associations --no-figure --out results/all_regions_R_new
 Rscript code/R/plot_all_regions.R \
-  --run-dir results/all_regions_R_new --out results/all_regions_R_figures_new
+  --run-dir results/all_regions_R_new --out results/all_regions_R_figures_new \
+  --include-indels
 ```
 
 For a large indexed VCF on Unix, use the parallel native R wrapper instead of
@@ -141,13 +142,18 @@ Rscript code/R/replot_all_regions.R \
   --out results/all_regions_R_figures_redrawn --workers 8
 ```
 
-The six panels show all available PASS biallelic SNPs by group: completeness
+With `--include-indels`, the panels show available PASS biallelic SNPs and
+sequence-resolved small indels by group, using circles and triangles respectively.
+Separate class counts and `variant_type` are retained in output tables/manifests.
+Without this option, the earlier SNP-only schema remains available.
+Genotype completeness
 uses all participants in that group, and observed ALT fractions use twice the
 number of called participants. REF plus ALT copies are independently checked
 against that denominator. A site with zero calls has unavailable ALT frequency,
 while its completeness is zero. Medians respect those different denominators.
-Indels and multiallelic records have explicit omission counts and remain in the
-full aggregate variant table. These descriptive pictures do not identify
+Multiallelic and unsupported records have explicit omission counts and remain in the
+full aggregate variant table. Allele-copy counts describe diploid genotypes,
+not copy-number variation. These descriptive pictures do not identify
 haplotype associations or causal variants. Results and interpretations are
 private only.
 
@@ -218,3 +224,14 @@ scanning have different total record counts; all records within selected
 windows, their QC, and their downstream results must agree.
 
 The private inputs and legacy artifacts are not part of the public checkout.
+
+## External GWAS fine-mapping
+
+The separate `finemap_external.R` workflow requires `susieR`, `jsonlite` and
+`openssl`. It consumes checksummed, ALT-oriented summary statistics and signed
+LD prepared with NumPy and `bcftools`. See the [complete extraction, reference
+acquisition and fitting instructions](../../docs/external_finemapping.md).
+Use `Rscript code/R/test_external_finemapping.R` for synthetic regression checks.
+Its posterior probabilities and credible sets describe an exploratory external
+study model; they do not establish cohort carrier associations or validated
+causal variants.

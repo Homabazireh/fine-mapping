@@ -124,6 +124,66 @@ class AllRegionsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             prepare_plot_data(self.run, self.out, self.summary, self.leads)
 
+    def test_indel_opt_in_preserves_missingness_and_snp_counts(self):
+        self.out.mkdir()
+        metadata = prepare_plot_data(self.run, self.out, self.summary, self.leads, include_indels=True)
+        self.assertEqual([r["biallelic_snps"] for r in metadata], [2, 1, 0])
+        self.assertEqual([r["biallelic_indels"] for r in metadata], [0, 0, 1])
+        self.assertEqual([r["plotted_variant_count"] for r in metadata], [2, 1, 1])
+        indels = read_table(self.out / metadata[2]["folder"] / "plot_data.tsv.gz")
+        self.assertEqual({r["variant_type"] for r in indels}, {"indel"})
+        control = next(r for r in indels if r["group"] == "Control")
+        self.assertEqual(control["completeness"], "0.0")
+        self.assertEqual(control["observed_alt_fraction"], "NA")
+        self.assertEqual(metadata[2]["other_records_omitted"], 0)
+
+    def test_indel_sequence_length_and_allele_conservation_are_checked(self):
+        for ref, alt in [("A", "AT"), ("AT", "A"), ("A", "A" * 50)]:
+            with self.subTest(ref=ref, alt=alt):
+                rows = self.variant(self.leads[0], 100, exact=True, alt=alt, kind="indel")
+                for row in rows:
+                    row["ref"] = ref
+                    row["allele"] = ref if row["allele_index"] == "0" else alt
+                exported = validate_variant(rows, self.leads[0], self.summary["group_counts"], include_indels=True)
+                self.assertEqual(len(exported), 3)
+                self.assertEqual({r["variant_type"] for r in exported}, {"indel"})
+                self.assertEqual(exported[0]["observed_alt_fraction"], .25)
+                rows[0]["allele_copies"] = "99"
+                with self.assertRaises(ValueError):
+                    validate_variant(rows, self.leads[0], self.summary["group_counts"], include_indels=True)
+        for alt in ["A" * 51, "<DEL>", "AN", "G"]:
+            rows = self.variant(self.leads[0], 100, alt=alt, kind="indel")
+            self.assertEqual(validate_variant(rows, self.leads[0], self.summary["group_counts"], include_indels=True), [])
+        rows = self.variant(self.leads[0], 100, alt="AAA", kind="indel")
+        self.assertEqual(validate_variant(rows, self.leads[0], self.summary["group_counts"],
+                                         include_indels=True, max_indel_length=1), [])
+
+    def test_mixed_multiallelic_record_remains_omitted_with_indel_opt_in(self):
+        rows = self.variant(self.leads[0], 100)
+        for row in rows:
+            row["alt"] = "G,AT"
+            row["type"] = "SNP/indel"
+        for row in list(rows):
+            if row["allele_index"] == "0":
+                rows.append({**row, "allele_index": "2", "allele": "AT", "allele_copies": "0"})
+        self.assertEqual(validate_variant(rows, self.leads[0], self.summary["group_counts"], include_indels=True), [])
+
+    def test_indel_export_labels_classes_and_renders_indel_only_region(self):
+        originals = {p.name: p.read_bytes() for p in self.run.iterdir()}
+        manifest = export_all_regions(self.run, self.out, workers=1, dpi=72, include_indels=True)
+        self.assertEqual(manifest["plotted_variant_count"], 4)
+        self.assertEqual(manifest["biallelic_snps"], 3)
+        self.assertEqual(manifest["biallelic_indels"], 1)
+        region = manifest["regions"][2]
+        text = (self.out / region["folder"] / "INTERPRETATION.md").read_text()
+        self.assertIn("0 SNPs and 1 small indels", text)
+        self.assertIn("triangles are small indels", text)
+        self.assertIn("SNPs / indels", (self.out / "index.html").read_text())
+        interpretation = read_table(self.out / "interpretations.tsv")
+        third = [r for r in interpretation if r["locus_id"] == "L0003"]
+        self.assertTrue(all(r["biallelic_indels"] == "1" and r["plotted_variant_count"] == "1" for r in third))
+        self.assertEqual({p.name: p.read_bytes() for p in self.run.iterdir()}, originals)
+
     def test_separate_figures_and_interpretations_for_every_region_are_portable(self):
         try:
             import matplotlib  # noqa: F401

@@ -39,7 +39,8 @@ This bounded-memory diagnostic needs `bcftools` and `awk`. It records aggregate 
 .venv/bin/python code/plot_haplotype_contrasts.py \
   --run-dir results/all_regions_run --out results/all_regions_run/contrasts
 .venv/bin/python code/plot_all_regions.py \
-  --run-dir results/all_regions_run --out results/all_regions_run/regions --workers 4
+  --run-dir results/all_regions_run --out results/all_regions_run/regions \
+  --include-indels --workers 4
 .venv/bin/python code/plot_descriptive_haplotypes.py \
   --run-dir results/all_regions_run --out results/all_regions_run/descriptive_haplotypes
 ```
@@ -48,7 +49,9 @@ Panel C displays lead-genotype completeness. It must not be described as a haplo
 
 Interpretation reports count identified-haplotype comparisons separately from region-status placeholders. An excluded region contributes two requested Control-contrast placeholders without an identified haplotype; these are not two failed haplotype tests. Regional reports state their scope within the full source run. The first reported inference gate may hide additional participant-resolution or carrier-count failures, and a post-QC reference-call count cannot establish what was present before QC. Use the independent raw-genotype audit for that distinction. Contrast indexes and manifests record the complete source directory.
 
-The all-region plotting script draws a separate picture for each region using every available passing biallelic SNP in its saved window. It records omitted indels and multiallelic sites explicitly and preserves the full regional allele table. Completeness is called participants divided by the full group size. Regional ALT frequency is ALT copies divided by called chromosomes; it is conditional on successful calls and can be biased when calls are selective. Missing frequencies remain unavailable. Regional scatterplots do not establish phase, shared ancestry, association or causality.
+The all-region plotting script draws a separate picture for each region. With `--include-indels`, it includes passing biallelic SNPs and explicit small-indel sequences within the saved analysis's allele-length limit. Circles identify SNPs; triangles identify indels; colors identify participant groups. Tables and manifests include `variant_type`, separate SNP/indel counts and `plotted_variant_count`. Multiallelic and unsupported records have explicit omission counts and remain in the full regional allele table. Omitting the option preserves the earlier SNP-only schema.
+
+Completeness is called participants divided by the full group size. Regional ALT frequency is ALT copies divided by called chromosomes; it is conditional on successful calls and can be biased when calls are selective. A zero-call site has zero completeness and unavailable ALT frequency. Allele-copy counts are counts of the two diploid alleles, not copy-number-variation estimates. Regional scatterplots do not establish phase, shared ancestry, association or causality.
 
 When descriptive haplotype panels exist but inference remains unavailable, `plot_descriptive_haplotypes.py` shows every observed local pattern: three chromosome-copy frequencies and two descriptive disease-minus-Control differences. It recalculates fractions from counts and reports resolution denominators. The picture does not assign p-values, confidence intervals or significance to these untested differences.
 
@@ -72,3 +75,5 @@ The optional report workflow is `code/build_report.py --run-dir RUN --no-preflig
 A completed run records `COMPLETED.txt`. Keep its source tables and provenance together. Genomic TSV coordinates are one-based; BED start coordinates are zero-based and the end is exclusive. The independent [R workflow](../code/R/README.md) can reproduce analysis tables and figures, with `verify_parity.R` checking numerical agreement.
 
 `code/audit_finemapping.py` and its R equivalent audit existing fine-mapping evidence, including harmonization and LD limitations. Valid candidate localization requires suitable genotypes, full harmonized regional summary statistics, sample-size information, appropriate LD and fine-mapping diagnostics. Functional evidence and independent replication strengthen causal interpretation. Unavailable estimates do not demonstrate equal group frequencies.
+
+For a separate exploratory model using documented public GWAS statistics and independent reference genotypes, follow the [external SNP/indel extraction, LD and SuSiE-RSS workflow](external_finemapping.md). Its outputs describe the external study and remain separate from cohort haplotype tests.

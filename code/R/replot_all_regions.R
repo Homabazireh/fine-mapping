@@ -34,11 +34,12 @@ replot_all_regions <- function(run_dir, plot_dir, out, workers = 8L) {
     if (is.na(lead_index)) stop("Unknown region in saved export.")
     lead <- as.list(leads[lead_index, ])
     table <- read_tsv(file.path(plot_dir, region$files$data))
-    if (!identical(names(table), REGION_PLOT_FIELDS)) stop("Saved plotting schema does not match.")
+    if (!identical(names(table), regional_plot_fields(isTRUE(manifest$include_indels)))) stop("Saved plotting schema does not match.")
     for (field in numeric_fields) table[[field]] <- suppressWarnings(as.numeric(table[[field]]))
     rows <- lapply(seq_len(nrow(table)), function(j) as.list(table[j, ]))
     folder <- file.path(out, region$directory); dir.create(folder)
-    for (type in c("png", "pdf")) draw_all_region(list(rows = rows), lead, summary, file.path(folder, paste0("region.", type)), type)
+    for (type in c("png", "pdf")) draw_all_region(list(rows = rows, include_indels = isTRUE(manifest$include_indels)),
+      lead, summary, file.path(folder, paste0("region.", type)), type)
     for (field in c("data", "interpretation"))
       if (!file.copy(file.path(plot_dir, region$files[[field]]), file.path(out, region$files[[field]]))) stop("Could not copy saved regional table or interpretation.")
     TRUE

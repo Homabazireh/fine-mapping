@@ -1,4 +1,0 @@
-# Python 3.10+; the VCF reader itself uses only the standard library.
-numpy>=1.23.5
-scipy>=1.10
-matplotlib>=3.6

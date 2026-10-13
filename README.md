@@ -6,13 +6,13 @@ This public repository contains code, tests and methodological documentation onl
 
 ## Reproduce an analysis
 
-Use Python 3.10+ and R 4.3+ with `jsonlite`; install `bcftools` for the R VCF reader. External LD preparation additionally uses NumPy, and external fine-mapping requires the R packages `susieR`, `jsonlite` and `openssl`. Supply the inputs documented in [data/raw/README.md](data/raw/README.md), or restore the private release according to its `PRIVATE_DATA.md`.
+Use Python 3.12 or newer (tested with Python 3.14) and R 4.3+ with `jsonlite`; install `bcftools` for the R VCF reader. External LD preparation additionally uses NumPy, and external fine-mapping requires the R packages `susieR`, `jsonlite` and `openssl`. Supply the inputs documented in [data/raw/README.md](data/raw/README.md), or restore the private release according to its `PRIVATE_DATA.md`.
 
-The tested Python 3.14 package versions are pinned in [requirements-analysis.lock.txt](requirements-analysis.lock.txt). Use that file instead of the minimum-version requirements when recreating the same software environment.
+[requirements.txt](requirements.txt) is the only Python package list. It contains the exact versions used to test this project. Install them with the command below.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-analysis.txt
+.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python code/make_sample_template.py \
   --metadata data/raw/participant_groups_final.tsv \
   --id-map data/intermediate/participant_review/verified_id_map.tsv \

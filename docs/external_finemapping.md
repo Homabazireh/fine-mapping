@@ -21,7 +21,8 @@ Rscript code/R/finemap_external.R --config config/external_finemapping.json
 
 ## Inputs and dependencies
 
-Install the Python packages in `requirements-analysis.txt`, including NumPy for
+Use Python 3.12 or newer (tested with Python 3.14). Install the Python packages
+with `python -m pip install -r requirements.txt`, including NumPy for
 signed LD calculations. The cohort VCF reader and external statistics extractor
 use the Python standard library; that statement does not cover LD preparation
 or plotting. Install `bcftools`, an indexed GRCh38 reference FASTA, and the R

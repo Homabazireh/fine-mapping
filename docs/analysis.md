@@ -20,6 +20,17 @@ The VCF is scanned once. Regional tables retain the qualifying SNP/indel records
 
 Marker panels use the same variants in every group. A participant with more than one heterozygous marker requires consistent, explicit phase-set information. Descriptive haplotype frequencies use resolved chromosome copies. Inferential comparisons use participant carriers, with reference-genotype provenance and minimum resolution/count checks. See [the statistical specification](haplotype_comparison.md).
 
+To diagnose absent reference calls independently of genotype-quality filtering, audit raw VCF genotypes across the union of selected windows:
+
+```bash
+.venv/bin/python code/audit_reference_genotypes.py \
+  --vcf data/raw/full_LR-WGS.vcf.gz \
+  --leads results/all_regions_run/lead_loci.tsv \
+  --out results/reference_genotype_audit_new
+```
+
+This bounded-memory diagnostic needs `bcftools` and `awk`. It records aggregate raw genotype categories, missing DP/GQ at matching leads, source checksums and merge provenance, without participant identifiers. Its results remain private. It diagnoses unavailable reference information; it cannot reconstruct genotypes or authorize the reference-provenance flag.
+
 ## Figure generation
 
 ```bash
@@ -33,7 +44,7 @@ Marker panels use the same variants in every group. A participant with more than
   --run-dir results/all_regions_run --out results/all_regions_run/descriptive_haplotypes
 ```
 
-Panel C displays lead-genotype completeness. It must not be described as a haplotype frequency plot. The contrast figure displays eligible carrier-frequency differences with confidence intervals and adjusted p-values, or an explicit reason why an estimate is unavailable.
+Panel C displays lead-genotype completeness. It must not be described as a haplotype frequency plot. The contrast figure displays observed participant-carrier differences for every resolved haplotype, even when inference is withheld. Its overview contains all available panels, with separate regional pictures and interpretations linked from `index.md`; the complete table retains excluded regions and their reasons. Descriptive observations have no confidence intervals or significance marks. Valid tested comparisons additionally display their confidence intervals and original full-family adjusted p-values in the regional pictures. Missing observations remain unavailable, while a genuine observed zero is shown at zero.
 
 The all-region plotting script draws a separate picture for each region using every available passing biallelic SNP in its saved window. It records omitted indels and multiallelic sites explicitly and preserves the full regional allele table. Completeness is called participants divided by the full group size. Regional ALT frequency is ALT copies divided by called chromosomes; it is conditional on successful calls and can be biased when calls are selective. Missing frequencies remain unavailable. Regional scatterplots do not establish phase, shared ancestry, association or causality.
 

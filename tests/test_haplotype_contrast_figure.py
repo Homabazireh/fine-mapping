@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "code"))
 
 from compare_haplotypes import COMP_FIELDS, FREQ_FIELDS
-from plot_haplotype_contrasts import draw_contrasts, export_contrasts, interpretation, load_contrasts
+from plot_haplotype_contrasts import INFERENCE_SOURCE_FIELDS, draw_contrasts, export_contrasts, interpretation, load_contrasts
 
 
 def table(path, fields, rows):
@@ -97,6 +97,8 @@ class HaplotypeContrastTests(unittest.TestCase):
     def test_skipped_haplotype_does_not_plot_a_descriptive_difference_as_inference(self):
         pair, freq = self.eligible_fixture()
         pair["test_status"] = "not_tested_reference_provenance"
+        for field in INFERENCE_SOURCE_FIELDS:
+            pair[field] = "NA"
         self.summary["parameters"]["reference_genotypes_confirmed"] = False
         self.save([pair], freq)
         _, rows = load_contrasts(self.run)
@@ -104,6 +106,55 @@ class HaplotypeContrastTests(unittest.TestCase):
         self.assertIsNone(row["carrier_frequency_difference"])
         self.assertIsNone(row["q_BH_all_pairwise_tests"])
         self.assertEqual(row["haplotype_frequency_case_descriptive"], .3)
+        self.assertEqual(row["comparison_status"], "descriptive_only")
+        self.assertEqual(row["inference_status"], "not_tested_reference_provenance")
+        self.assertAlmostEqual(row["descriptive_carrier_frequency_difference"], .2)
+
+    def descriptive_fixture(self):
+        pair, freq = self.eligible_fixture()
+        pair["test_status"] = "not_tested_reference_provenance"
+        for field in INFERENCE_SOURCE_FIELDS:
+            pair[field] = "NA"
+        self.summary["parameters"]["reference_genotypes_confirmed"] = False
+        return pair, freq
+
+    def test_true_observed_zero_is_distinct_from_missing_and_has_no_inference(self):
+        pair, freq = self.descriptive_fixture()
+        pair.update(carriers_a=10, carrier_frequency_a=.5)
+        self.save([pair], freq)
+        _, rows = load_contrasts(self.run)
+        observed = rows[0]
+        self.assertEqual(observed["descriptive_carrier_frequency_difference"], 0)
+        self.assertEqual(observed["comparison_status"], "descriptive_only")
+        self.assertIsNone(observed["CI95_low"])
+        self.assertIsNone(rows[1]["descriptive_carrier_frequency_difference"])
+        self.assertEqual(rows[1]["comparison_status"], "not_estimable")
+
+    def test_untested_counts_frequencies_and_inference_fields_are_validated(self):
+        pair, freq = self.descriptive_fixture()
+        for update, expected in [({"carriers_b": 21}, "counts"),
+                                 ({"carriers_b": 9.5}, "counts"),
+                                 ({"carrier_frequency_b": .6}, "disagrees"),
+                                 ({"p_fisher_two_sided": .01}, "Untested")]:
+            with self.subTest(update=update):
+                self.save([dict(pair, **update)], freq)
+                with self.assertRaisesRegex(ValueError, expected):
+                    load_contrasts(self.run)
+
+    def test_zero_denominator_stays_unavailable(self):
+        pair, freq = self.descriptive_fixture()
+        pair.update(n_resolved_b=0, carriers_b=0, carrier_frequency_b="NA")
+        self.save([pair], freq)
+        _, rows = load_contrasts(self.run)
+        self.assertIsNone(rows[0]["descriptive_carrier_frequency_difference"])
+        self.assertEqual(rows[0]["comparison_status"], "not_estimable")
+
+    def test_descriptive_difference_uses_exact_counts_not_rounded_frequency(self):
+        pair, freq = self.descriptive_fixture()
+        pair.update(n_resolved_b=21, carriers_b=7, carrier_frequency_b=.33333333)
+        self.save([pair], freq)
+        _, rows = load_contrasts(self.run)
+        self.assertEqual(rows[0]["descriptive_carrier_frequency_difference"], 7/21 - 6/20)
 
     def test_tested_rows_cannot_bypass_provenance_or_resolution_gates(self):
         pair, freq = self.eligible_fixture()
@@ -113,6 +164,7 @@ class HaplotypeContrastTests(unittest.TestCase):
             load_contrasts(self.run)
         self.summary["parameters"]["reference_genotypes_confirmed"] = True
         pair["n_resolved_b"] = 10
+        pair["carriers_b"] = 5
         self.save([pair], freq)
         with self.assertRaisesRegex(ValueError, "resolution"):
             load_contrasts(self.run)

@@ -7,6 +7,7 @@
 - Use one common, phenotype-blind marker panel per locus. Treat participants, rather than their two correlated chromosome copies, as the independent units in carrier association tests.
 - Report overall and pairwise test families separately, with multiple-testing correction, effect direction and uncertainty. Distinguish descriptive chromosome-copy frequencies from carrier association tests.
 - Report unavailable estimates as unavailable, with reasons. No eligible haplotypes does not mean equal frequencies, no association, or no causal variants.
+- Keep observed carrier differences separate from inferential estimates. A blocked test does not erase a computable descriptive observation, and zero tests does not imply zero eligible panels. Contrast landing pages must identify their source run and point to the current full-region analysis.
 - Distinguish external GWAS evidence, exploratory fine-mapping and cohort associations. Never promote unvalidated legacy PIPs to causal evidence.
 - The requested outputs include panel C, a haplotype contrast figure and separate regional marker pictures for every selected region. Preserve accurate quantity labels and provide per-region interpretations.
 

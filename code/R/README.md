@@ -83,13 +83,17 @@ Rscript code/R/plot_haplotype_contrasts.R \
   --run-dir results/cohort_R_new --out results/cohort_R_new/contrasts
 ```
 
-It compares Diabetes versus Control and Prediabetes versus Control, with
-participant-carrier frequency differences, confidence intervals and the existing
-full-family BH q-values whenever valid tests are available. Reversed source
-comparisons have their signs and interval bounds reoriented. Unavailable cells
-show their explicit exclusion reason without drawing an effect at zero.
-`contrast_data.tsv` retains chromosome-copy frequencies as descriptive columns;
-`INTERPRETATION.txt` states the limits of association and causal claims.
+It compares Diabetes versus Control and Prediabetes versus Control across every
+available panel. The overview shows observed participant-carrier differences;
+`index.md` links separate regional pictures with carrier/resolved denominators
+and interpretations. Descriptive-only differences are computed from counts,
+retain their blocked `inference_status`, and have no confidence intervals or
+p/q values. Only valid tested rows display intervals and the original full-family
+BH q-values. Reversed comparisons are reoriented. Unavailable observations
+remain missing, and actual observed zero differences remain zero.
+`contrast_data.tsv` keeps descriptive carrier differences separate from
+inferential fields and chromosome-copy frequencies. `INTERPRETATION.txt`
+explains the effects of missingness and the limits of causal claims.
 All figures, tables and interpretations stay in the private project.
 
 For separate pictures of every GWAS region, first select every available cluster

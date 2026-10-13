@@ -1,30 +1,7 @@
-# Prepared data and review tables
+# Private prepared inputs
 
-Store derived input tables here. Raw sources belong in `../raw/`.
+Prepared sample tables and participant-review records are private and ignored by Git. `samples.tsv` has exact VCF IDs in `sample` and authoritative phenotype labels in `group`.
 
-`participant_review/summary.json` records the authoritative
-`data/raw/participant_groups_final.tsv` source: 49 T2D, 48 Prediabetes and 50
-Control. Compared with the previous table, 92 participants change phenotype
-group and another 20 change only the category label from `NORM` to `Control`.
-All 11 proposed VCF aliases are confirmed in
-`participant_review/verified_id_map.tsv`. Together with 136 exact matches,
-these account for all 147 participants. The earlier review is retained in
-the archive recorded by the summary.
+An optional verified alias table has `metadata_sample` and `vcf_sample` columns. Keep source tables, identity verification, group-assignment audits and provenance together in the private workspace. The preparation script reports unmatched identifiers as unresolved and does not guess aliases. Resolve identity and group assignments before analysis; identity resolution does not establish genotype completeness.
 
-`cohort_preflight/` records an indexed genotype-completeness check at the
-selected GWAS lead sites, independent of participant category matching.
-`confirmed_groups_qc/summary.json` and `group_lead_genotype_qc.tsv` record the
-current check using the final table and verified map: 49 Diabetes, 48 Prediabetes
-and 50 Control participants. The exact counts are 45/44/47 and verified aliases
-are 4/4/3, respectively. Select this summary explicitly with
-`build_report.py --preflight`. The earlier `final_groups_qc/` check used only
-the 136 exact matches and is retained as history.
-
-The configured final analysis input is `samples.tsv`, with `sample` and `group`
-columns and verified VCF IDs. All 147 participants now have assignments in this
-final table; none has an unresolved identifier. The earlier
-`samples_from_authoritative_categories_for_review.tsv` candidate is retained
-for source review and is not the configured final analysis input.
-
-`demo/` is created when running the synthetic demonstration. Its participant
-labels are generated examples and do not apply to the cohort.
+Use a new output path for each preparation or quality-control run. Never publish these participant-level files to the public repository.

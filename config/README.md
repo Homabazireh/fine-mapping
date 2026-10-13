@@ -27,11 +27,4 @@ verified against the same build; configuration does not perform liftover.
 `--out`. Participant metadata is opt-in through `--metadata`; its presence in
 settings does not automatically assign groups. The configured metadata source is your final
 `data/raw/participant_groups_final.tsv`, with `name` identifiers and
-`Diabetes_Group` categories. The final `data/intermediate/samples.tsv` contains
-147 assignments, using 136 exact ID matches and 11 user-confirmed aliases from
-`data/intermediate/participant_review/verified_id_map.tsv`.
-
-Rebuild the current report with
-`--preflight data/intermediate/confirmed_groups_qc/summary.json` to select the
-genotype check computed from that final table. Earlier summaries may refer to
-superseded metadata and must not supply the current group denominators.
+`Diabetes_Group` categories. Prepare `data/intermediate/samples.tsv` using exact VCF IDs and independently verified aliases. Preserve source metadata and review records privately. If a saved preflight summary is used, verify that its metadata checksum matches the selected authoritative source.

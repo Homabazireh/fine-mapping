@@ -2,7 +2,7 @@
 
 These scripts implement the analysis directly in R: authoritative group preparation,
 GWAS lead selection, genotype QC, common marker panels, phase-set-aware haplotypes,
-group frequencies, participant-level overall/pairwise carrier tests, one panel C,
+group frequencies, participant-level overall/pairwise carrier tests, panel C,
 and an independent audit of saved fine-mapping evidence. They do not run Python.
 
 Use R 4.3 or newer and `jsonlite` (`install.packages("jsonlite")`). For the large
@@ -15,6 +15,7 @@ From the repository root, with the local private inputs restored:
 ```bash
 Rscript code/R/test_analysis.R
 Rscript code/R/test_audit.R
+Rscript code/R/test_haplotype_contrasts.R
 Rscript code/R/compare_haplotypes.R \
   --genome-build GRCh38 --test-associations \
   --out results/cohort_R_new
@@ -25,21 +26,14 @@ Rscript code/R/audit_finemapping.R \
   --out results/cohort_R_new/variant_evidence
 ```
 
-The current real-cohort result is **49 Diabetes, 48 Prediabetes, 50 Control**;
-19 selected regions fail lead completeness and one has unconfirmed palindromic
-orientation. No usable haplotype panels, group association estimates or causal
-variants are available. The best pooled lead coverage is 126/147 (85.71%), below
-the unchanged 90% requirement. Panel C plots genotype availability; it does not
-plot haplotype frequencies. Three image formats are exports of the same figure.
-
-The verified saved run is `results/haplotype_comparison_R_20261013_verified/`.
-Its corrected, visually checked figure is in `panel_c_publication/`; its
-top-level image exports retain an earlier layout. Current code produces the
-corrected layout on new runs. To re-render only the saved aggregate figure:
+Cohort figures, tables, counts and interpretations are private. Restore them from
+the private [fine-mapping-2 project](https://github.com/Homabazireh/fine-mapping-2).
+Panel C plots genotype availability, with PNG/PDF/SVG exports of the same figure.
+To re-render only the saved aggregate figure:
 
 ```bash
 Rscript code/R/export_panel_c.R \
-  --run-dir results/haplotype_comparison_R_20261013_verified \
+  --run-dir results/cohort_R_new \
   --out results/R_panel_c_new
 ```
 
@@ -47,9 +41,8 @@ Rscript code/R/export_panel_c.R \
 unavailable unless `--reference-genotypes-confirmed` is supported by independent
 callability checks. Do not use that flag simply to obtain output. Similarly,
 `--gwas-alleles-forward-confirmed` requires actual allele-orientation evidence.
-Missing calls are never converted to reference calls. No high-quality 0/0 calls
-were observed in the current selected regions, so the provenance gate remains
-closed. Unsupported tests retain a reason rather than fabricated estimates.
+Missing calls are never converted to reference calls. Unsupported tests retain
+the relevant quality or provenance reason rather than fabricated estimates.
 
 Settings come from `config/settings.json`; explicit options override them.
 Input paths in the settings are relative to the repository; command-line paths
@@ -72,13 +65,29 @@ when using software fixtures and `--no-figure` when checking tables only.
 The R analysis uses the same main TSV schemas as Python. It writes selected lead
 and marker tables, regional QC/allele frequencies, sample haplotypes, group phase
 QC, haplotype frequencies, overall comparisons, pairwise comparisons, and
-`panel_c_data.tsv`. The sole figure is `panel_c.png` (600 dpi), `panel_c.pdf`, and
+`panel_c_data.tsv`. Panel C is exported as `panel_c.png` (600 dpi), `panel_c.pdf`, and
 `panel_c.svg`. A native `variant_evidence_assessment.tsv` records why causal
 resolution is unavailable. The separate audit reads original GWAS and legacy
 SuSiE QC/PIP/credible-set/genotype artifacts, writes external lead evidence and
 aggregate audit rows, and deliberately writes a header-only candidate table.
-This audit only accepts the current unresolved-cohort setting; it does not
+This audit only accepts an unresolved cohort setting; it does not
 pretend to fine-map a future cohort with associated haplotypes.
+
+The requested disease-control figure is generated separately from saved tables:
+
+```bash
+Rscript code/R/plot_haplotype_contrasts.R \
+  --run-dir results/cohort_R_new --out results/cohort_R_new/contrasts
+```
+
+It compares Diabetes versus Control and Prediabetes versus Control, with
+participant-carrier frequency differences, confidence intervals and the existing
+full-family BH q-values whenever valid tests are available. Reversed source
+comparisons have their signs and interval bounds reoriented. Unavailable cells
+show their explicit exclusion reason without drawing an effect at zero.
+`contrast_data.tsv` retains chromosome-copy frequencies as descriptive columns;
+`INTERPRETATION.txt` states the limits of association and causal claims.
+All figures, tables and interpretations stay in the private project.
 
 P-values are compared/ranked using complete decimal digit strings and decimal
 exponents, including values smaller than machine precision. Lead clustering uses
@@ -108,9 +117,9 @@ For saved Python/R runs, compare full tables and independently audited evidence:
 
 ```bash
 Rscript code/R/verify_parity.R \
-  --python-dir results/haplotype_comparison_20261013/cohort \
+  --python-dir results/cohort_Python_new \
   --r-dir results/cohort_R_new \
-  --python-audit results/haplotype_comparison_20261013/variant_evidence \
+  --python-audit results/cohort_Python_new/variant_evidence \
   --r-audit results/cohort_R_new/variant_evidence \
   --out results/cohort_R_new/parity_summary.json
 ```

@@ -62,3 +62,10 @@ literature_review/**/*.pdf
 *.gif
 *.webp
 docs/figures/*.html
+
+# All generated cohort results and interpretations are private-only.
+docs/figures/*
+!docs/figures/README.md
+docs/contrasts/
+docs/regions/
+literature_review/**/review.html

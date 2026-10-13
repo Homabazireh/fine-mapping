@@ -1,0 +1,40 @@
+{
+  "action": "regional_plots",
+  "actions": {
+    "regional_plots": {
+      "input": {"run_dir": "../results/cohort_completed"},
+      "out": "../results/regional_R_new",
+      "options": {"include_indels": true}
+    },
+    "external_finemapping": {
+      "input": {"config": "external_finemapping.json"},
+      "options": {}
+    },
+    "cohort_analysis": {
+      "input": {
+        "config": "settings.json",
+        "vcf": "../data/raw/cohort.vcf.gz",
+        "gwas": "../data/raw/gwas_leads.tsv",
+        "samples": "../data/intermediate/samples.tsv"
+      },
+      "out": "../results/cohort_R_new",
+      "options": {
+        "genome_build": "GRCh38",
+        "workers": 4,
+        "top_loci": 0,
+        "test_associations": false,
+        "figure": false
+      }
+    },
+    "haplotype_contrasts": {
+      "input": {"run_dir": "../results/cohort_completed"},
+      "out": "../results/haplotype_contrasts_R_new",
+      "options": {}
+    },
+    "descriptive_haplotypes": {
+      "input": {"run_dir": "../results/cohort_completed"},
+      "out": "../results/descriptive_haplotypes_R_new",
+      "options": {"columns": 3}
+    }
+  }
+}

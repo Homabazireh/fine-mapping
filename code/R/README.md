@@ -1,5 +1,7 @@
 # Independent R reproduction
 
+**[Editable R options, command-line examples and RStudio entry points](../../docs/R_options.md)** · [External model settings](../../config/external_finemapping.json) · [Workflow action settings](../../config/R_workflow.example.json).
+
 These scripts implement the analysis directly in R: authoritative group preparation,
 GWAS lead selection, genotype QC, common marker panels, phase-set-aware haplotypes,
 group frequencies, participant-level overall/pairwise carrier tests, panel C,
@@ -19,6 +21,8 @@ Rscript code/R/test_haplotype_contrasts.R
 Rscript code/R/test_all_regions.R
 Rscript code/R/test_descriptive_haplotypes.R
 Rscript code/R/test_parallel_analysis.R
+Rscript code/R/test_external_finemapping.R
+Rscript code/R/test_configured_analysis.R
 Rscript code/R/compare_haplotypes.R \
   --genome-build GRCh38 --test-associations \
   --out results/cohort_R_new

@@ -6,6 +6,19 @@ analysis with their existing genotype and phase requirements. Preserve a new
 output directory at every stage; keep region selections, results, figures and
 interpretations in the private project.
 
+## Change R model and figure options
+
+Use the [editable options guide](R_options.md) and
+[config/external_finemapping.json](../config/external_finemapping.json) to select
+variant classes, model size, credible-set coverage, iterations, workers and
+PNG/PDF/SVG exports. Configuration is optional; existing command-line calls
+retain their scientific defaults. Every run records its effective settings and
+requires a new output directory.
+
+```bash
+Rscript code/R/finemap_external.R --config config/external_finemapping.json
+```
+
 ## Inputs and dependencies
 
 Install the Python packages in `requirements-analysis.txt`, including NumPy for

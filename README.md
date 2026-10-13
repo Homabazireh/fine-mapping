@@ -33,6 +33,22 @@ Only declare `--reference-genotypes-confirmed` or `--gwas-alleles-forward-confir
 
 For regional SNP **and indel** pictures from an existing all-region run, add `--include-indels` to either regional plotter. The default retains the earlier SNP-only format. The separate [external fine-mapping workflow](docs/external_finemapping.md) extracts full regional summary statistics, acquires public reference LD, checks allele alignment, and fits exploratory SuSiE-RSS models. It does not repair unavailable cohort genotype calls or carrier associations.
 
+## R code with editable options
+
+Start with [R options and RStudio instructions](docs/R_options.md). Edit
+[external fine-mapping settings](config/external_finemapping.json) or the
+[R workflow example](config/R_workflow.example.json), then run:
+
+```bash
+Rscript code/R/finemap_external.R --config config/external_finemapping.json
+```
+
+The model supports joint SNP/indel, SNP-only or indel-only runs, configurable
+credible-set coverage and model size, regional selection, workers, and
+PNG/PDF/SVG exports. The [R source](code/R/finemap_external.R) and
+[cohort R scripts](code/R/README.md) are included in both repositories.
+Keep every real input and output in the private project.
+
 ## Validation
 
 ```bash

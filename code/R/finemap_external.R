@@ -10,7 +10,7 @@ EXTERNAL_FIELDS <- c("variant_id", "chrom", "pos", "ref", "alt", "variant_type",
 EXTERNAL_QC <- list(min_maf = .01, max_af_difference = .1, matrix_tolerance = 1e-8,
   s_warning = .1, s_block = .5, kriging_abs_residual_warning = 6, kriging_logLR_warning = 2,
   kriging_abs_z_for_logLR = 2, boundary_distance_bp = 5000,
-  strong_association_p = 5e-8, max_iter = 200L, coverage = .95)
+  strong_association_p = 5e-8, max_effects = 10L, max_iter = 200L, coverage = .95)
 EXTERNAL_METHODS <- c("https://stephenslab.github.io/susieR/reference/susie_rss.html",
   "https://stephenslab.github.io/susieR/articles/susierss_diagnostic.html",
   "https://elifesciences.org/articles/88768")
@@ -37,6 +37,102 @@ external_relative_file <- function(root, relative) {
   if (!startsWith(path, paste0(normalizePath(root), "/"))) stop("Input file escapes input directory.")
   path
 }
+EXTERNAL_DEFAULTS <- list(input_dir = NULL, out = NULL, workers = 4L, locus = NULL,
+  max_effects = 10L, coverage = .95, max_iter = 200L, variant_types = "both",
+  plot_width = 1800L, plot_height = 1150L, plot_dpi = 150L, plot_formats = "png")
+
+external_named_object <- function(value, allowed, label) {
+  if (!is.list(value) || (length(value) && (is.null(names(value)) || any(!nzchar(names(value))) || anyDuplicated(names(value))))) stop(label, " must be a JSON object with unique keys.")
+  unknown <- setdiff(names(value), allowed)
+  if (length(unknown)) stop("Unknown ", label, " setting(s): ", paste(unknown, collapse = ", "), ". Scientific QC gates cannot be overridden.")
+}
+external_config <- function(path) {
+  if (!is.character(path) || length(path) != 1L || is.na(path) || !nzchar(path)) stop("config must be one JSON file path.")
+  path <- normalizePath(path, mustWork = TRUE)
+  hash <- external_sha256(path)
+  value <- jsonlite::fromJSON(path, simplifyVector = FALSE)
+  if (external_sha256(path) != hash) stop("Configuration changed while reading.")
+  schema <- list(paths = c("input_dir", "out"), analysis = c("workers", "locus", "max_effects", "coverage", "max_iter", "variant_types"),
+    plot = c("width", "height", "dpi", "formats"))
+  external_named_object(value, names(schema), "configuration")
+  options <- list()
+  for (section in names(value)) {
+    external_named_object(value[[section]], schema[[section]], paste("configuration", section))
+    for (key in names(value[[section]])) {
+      item <- value[[section]][[key]]
+      if (section == "paths") {
+        if (!is.character(item) || length(item) != 1L || is.na(item) || !nzchar(item)) stop("Configuration paths must be nonempty strings.")
+        item <- path.expand(item)
+        if (!startsWith(item, "/")) item <- file.path(dirname(path), item)
+      }
+      if (section == "plot" && key == "formats") {
+        if (!is.list(item) || !is.null(names(item)) || !length(item) || any(!vapply(item, function(x) is.character(x) && length(x) == 1L && !is.na(x), logical(1)))) stop("plot.formats must be a nonempty JSON array of format strings.")
+        item <- unlist(item, use.names = FALSE)
+      }
+      name <- if (section == "plot") paste0("plot_", key) else key
+      options[name] <- list(item)
+    }
+  }
+  list(path = path, sha256 = hash, options = options)
+}
+external_validate_options <- function(options, require_paths = TRUE) {
+  external_named_object(options, names(EXTERNAL_DEFAULTS), "analysis options")
+  for (key in c("workers", "max_effects", "max_iter", "plot_width", "plot_height", "plot_dpi")) {
+    x <- options[[key]]
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x) || x < 1 || x != floor(x) || x > .Machine$integer.max) stop(key, " must be a positive integer.")
+    options[[key]] <- as.integer(x)
+  }
+  if (!is.numeric(options$coverage) || length(options$coverage) != 1L || !is.finite(options$coverage) || options$coverage <= 0 || options$coverage >= 1) stop("coverage must be strictly between 0 and 1.")
+  if (!is.character(options$variant_types) || length(options$variant_types) != 1L || is.na(options$variant_types) || !options$variant_types %in% c("both", "snps", "indels")) stop("variant_types must be both, snps or indels.")
+  if (!is.character(options$plot_formats) || !length(options$plot_formats) || anyNA(options$plot_formats) || anyDuplicated(options$plot_formats) || any(!options$plot_formats %in% c("png", "pdf", "svg"))) stop("plot_formats must contain unique formats from png, pdf, svg.")
+  if (!is.null(options$locus) && (!is.character(options$locus) || length(options$locus) != 1L || is.na(options$locus) || !grepl("^[A-Za-z0-9][A-Za-z0-9_.-]*$", options$locus) || grepl("..", options$locus, fixed = TRUE))) stop("locus must be NULL or one safe locus identifier.")
+  for (key in c("input_dir", "out")) {
+    x <- options[[key]]
+    if (!is.null(x) || require_paths) if (!is.character(x) || length(x) != 1L || is.na(x) || !nzchar(x)) stop(key, " is required as a nonempty path, through configuration or CLI.")
+  }
+  options
+}
+external_resolve_options <- function(overrides = list(), config = NULL) {
+  external_named_object(overrides, names(EXTERNAL_DEFAULTS), "overrides")
+  source <- if (is.null(config)) NULL else external_config(config)
+  options <- EXTERNAL_DEFAULTS
+  if (!is.null(source)) {
+    options[names(source$options)] <- source$options
+    # Validate the configuration itself, including values later overridden by CLI.
+    options <- external_validate_options(options, require_paths = FALSE)
+  }
+  options[names(overrides)] <- overrides
+  list(options = external_validate_options(options), config = source)
+}
+run_external_finemapping_config <- function(config, overrides = list()) {
+  external_named_object(overrides, names(EXTERNAL_DEFAULTS), "overrides")
+  do.call(run_external_finemapping, c(list(config = config), overrides))
+}
+external_validate_ld <- function(R, p, qc = EXTERNAL_QC) {
+  if (!identical(dim(R), rep(as.integer(p), 2L)) || any(!is.finite(R))) stop("LD must be a complete finite square matrix aligned to every variant.")
+  if (!p) return(list(R = R, minimum_eigenvalue = NA_real_, eigenvalue_tolerance = NA_real_))
+  if (max(abs(R-t(R))) > qc$matrix_tolerance || max(abs(diag(R)-1)) > qc$matrix_tolerance || max(abs(R)) > 1+qc$matrix_tolerance) stop("LD must be a symmetric correlation matrix with unit diagonal.")
+  decomposition <- eigen(R, symmetric = TRUE)
+  tolerance <- qc$matrix_tolerance*max(1, max(abs(decomposition$values)))
+  if (min(decomposition$values) < -tolerance) stop("LD matrix is not positive semidefinite.")
+  attr(R, "eigen") <- decomposition
+  list(R = R, minimum_eigenvalue = min(decomposition$values), eigenvalue_tolerance = tolerance)
+}
+external_select_variants <- function(data, variant_types = "both", qc = EXTERNAL_QC) {
+  # Called only after all source variants and the entire source LD matrix pass validation.
+  data$source_counts <- list(n_variants = nrow(data$variants), n_snps = sum(data$variants$variant_type == "SNP"),
+    n_insertions = sum(data$variants$variant_type == "insertion"), n_deletions = sum(data$variants$variant_type == "deletion"),
+    n_complex_indels = sum(data$variants$variant_type == "complex_indel"))
+  keep <- switch(variant_types, both = rep(TRUE, nrow(data$variants)), snps = data$variants$variant_type == "SNP", indels = data$variants$variant_type != "SNP", stop("Invalid variant selection."))
+  data$source_variant_indices <- which(keep)
+  if (!all(keep)) {
+    data$variants <- data$variants[keep, , drop = FALSE]
+    checked <- external_validate_ld(data$R[keep, keep, drop = FALSE], sum(keep), qc)
+    data[names(checked)] <- checked
+  }
+  data
+}
+
 external_manifest <- function(input_dir) {
   path <- file.path(input_dir, "input_manifest.json")
   before <- external_sha256(path)
@@ -101,18 +197,14 @@ external_load_locus <- function(input_dir, entry, total_n, qc = EXTERNAL_QC) {
   matrix_data <- read.table(con, header = FALSE, sep = "\t", check.names = FALSE, colClasses = "numeric", na.strings = c("NA", ".", ""))
   R <- as.matrix(matrix_data)
   dimnames(R) <- NULL
-  if (!identical(dim(R), rep(nrow(variants), 2L)) || any(!is.finite(R))) stop("LD must be a complete finite square matrix aligned to every variant.")
-  if (max(abs(R-t(R))) > qc$matrix_tolerance || max(abs(diag(R)-1)) > qc$matrix_tolerance || max(abs(R)) > 1+qc$matrix_tolerance) stop("LD must be a symmetric correlation matrix with unit diagonal.")
-  decomposition <- eigen(R, symmetric = TRUE)
-  tolerance <- qc$matrix_tolerance*max(1, max(abs(decomposition$values)))
-  if (min(decomposition$values) < -tolerance) stop("LD matrix is not positive semidefinite.")
+  checked <- external_validate_ld(R, nrow(variants), qc)
   # Preserve the supplied R; no shrinkage, allele flips or outlier removal.
-  attr(R, "eigen") <- decomposition
+  R <- checked$R
   hashes <- c(variants = external_sha256(variant_file), ld = external_sha256(ld_file))
   if (!identical(unname(hashes), tolower(c(entry$variants_sha256, entry$ld_sha256)))) stop("Input files changed while reading.")
   list(variants = variants, R = R, paths = c(variant_file, ld_file),
     hashes = hashes,
-    window = window, minimum_eigenvalue = min(decomposition$values), eigenvalue_tolerance = tolerance)
+    window = window, minimum_eigenvalue = checked$minimum_eigenvalue, eigenvalue_tolerance = checked$eigenvalue_tolerance)
 }
 
 external_diagnostics <- function(variants, R, n, qc = EXTERNAL_QC) {
@@ -131,7 +223,7 @@ external_diagnostics <- function(variants, R, n, qc = EXTERNAL_QC) {
 }
 external_fit <- function(z, R, n, qc = EXTERNAL_QC) {
   susieR::susie_rss(z = z, R = R, n = n, estimate_residual_variance = FALSE,
-    L = min(10L, length(z)), max_iter = qc$max_iter, coverage = qc$coverage,
+    L = min(qc$max_effects, length(z)), max_iter = qc$max_iter, coverage = qc$coverage,
     n_purity = length(z))
 }
 external_usable_fit <- function(fit, p) {
@@ -161,14 +253,23 @@ external_credible_sets <- function(fit, variants, R, window, status, qc = EXTERN
   list(table = output, membership = membership)
 }
 
-external_plot <- function(variants, pip, summary, path) {
-  png(path, width = 1800, height = 1150, res = 150, type = "cairo")
+external_plot <- function(variants, pip, summary, path, plot_options = list(width = 1800L, height = 1150L, dpi = 150L)) {
+  format <- tools::file_ext(path)
+  width <- plot_options$width; height <- plot_options$height; dpi <- plot_options$dpi
+  # Scale type with the canvas while honoring requested raster pixels / vector inches.
+  pointsize <- 12 * min(width/1800, height/1150) * 150/dpi
+  switch(format,
+    png = png(path, width = width, height = height, res = dpi, pointsize = pointsize, type = "cairo"),
+    pdf = pdf(path, width = width/dpi, height = height/dpi, pointsize = pointsize, useDingbats = FALSE),
+    svg = svg(path, width = width/dpi, height = height/dpi, pointsize = pointsize),
+    stop("Unsupported plot format: ", format))
   on.exit(dev.off())
   par(mfrow = c(2, 1), mar = c(4, 5.2, 3.5, 1.2), oma = c(3.1, 0, 4, 0), family = "sans")
   palette <- c(SNP = "#22679a", insertion = "#c87512", deletion = "#813d9c", complex_indel = "#237843")
   symbols <- c(SNP = 16, insertion = 17, deletion = 15, complex_indel = 18)
   if (is.null(variants) || !nrow(variants)) {
-    for (i in 1:2) { plot.new(); text(.5, .5, if (i == 1) "External estimates unavailable: input validation failed" else "No model PIPs", cex = 1.1) }
+    missing_label <- if (summary$status == "unavailable_too_few_selected_variants") "No variants retained by the requested class selection" else "External estimates unavailable: input validation failed"
+    for (i in 1:2) { plot.new(); text(.5, .5, if (i == 1) missing_label else "No model PIPs", cex = 1.1) }
   } else {
     x <- variants$pos/1e6; low <- variants$beta-qnorm(.975)*variants$se; high <- variants$beta+qnorm(.975)*variants$se
     colors <- unname(palette[variants$variant_type]); pch <- unname(symbols[variants$variant_type])
@@ -177,20 +278,22 @@ external_plot <- function(variants, pip, summary, path) {
     segments(x, low, x, high, col = adjustcolor(colors, alpha.f = .35)); points(x, variants$beta, pch = pch, col = colors, cex = .6)
     present <- names(palette)[names(palette) %in% variants$variant_type]
     legend("topright", legend = present, col = palette[present], pch = symbols[present], bty = "n", horiz = TRUE)
-    plot(x, rep(0, length(x)), ylim = c(0, 1), type = "n", xlab = paste0(variants$chrom[1], " position (Mb; GRCh38)"), ylab = "Exploratory posterior inclusion probability", main = sprintf("SuSiE-RSS with independent reference LD; effective N = %.2f", summary$primary_n))
+    plot(x, rep(0, length(x)), ylim = c(0, 1), type = "n", xlab = paste0(variants$chrom[1], " position (Mb; GRCh38)"), ylab = "Exploratory posterior inclusion probability", main = sprintf("SuSiE-RSS; effective N = %.2f; L <= %d; %g%% credible sets", summary$primary_n, summary$max_effects, 100*summary$coverage))
     if (any(is.finite(pip))) points(x, pip, pch = pch, col = colors, cex = .8)
-    else text(mean(range(x)), .5, "PIPs unavailable; see status and diagnostics", col = "#864316")
+    else text(mean(range(x)), .5, if (summary$status == "unavailable_too_few_selected_variants") "PIPs unavailable: fewer than two selected variants" else "PIPs unavailable; see status and diagnostics", col = "#864316")
   }
   mtext(paste(summary$locus_id, "| WINDOW-LIMITED EXTERNAL FINE-MAPPING"), outer = TRUE, line = 2.3, font = 2, cex = 1.15)
-  mtext(summary$status, outer = TRUE, line = .8, col = "#864316", cex = .9)
+  mtext(paste(summary$status, "| variant selection:", summary$variant_types), outer = TRUE, line = .8, col = "#864316", cex = .9)
   mtext("Exploratory model values, not validated causal variants or cohort haplotype effects.", side = 1, outer = TRUE, line = .7, cex = .8)
   mtext("Binary-trait RSS approximation; independent LD may differ from the GWAS. Window boundaries can truncate signals.", side = 1, outer = TRUE, line = 1.9, cex = .75)
 }
 
-external_run_locus <- function(input_dir, entry, manifest, out, qc = EXTERNAL_QC) {
+external_run_locus <- function(input_dir, entry, manifest, out, qc = EXTERNAL_QC, variant_types = "both", plot_options = list(width = 1800L, height = 1150L, dpi = 150L, formats = "png")) {
   folder <- file.path(out, entry$locus_id); dir.create(folder)
   summary <- list(locus_id = entry$locus_id, status = "unavailable_input_validation", reason = NULL,
     analysis_scope = "WINDOW-LIMITED_EXTERNAL", validated_causal_candidates = FALSE,
+    variant_types = variant_types, max_effects = qc$max_effects, coverage = qc$coverage, max_iter = qc$max_iter,
+    n_source_variants = NA_integer_, source_variant_counts = NULL, selected_source_variant_indices = NULL, plot = plot_options,
     total_n = manifest$total_n, effective_n = manifest$effective_n, binary_trait_RSS_approximation = TRUE,
     sample_size_basis = "Nominal study-level case/control totals; no per-variant measured sample sizes were supplied.",
     primary_n = manifest$effective_n, primary_n_basis = "4 / (1/n_cases + 1/n_controls)", sensitivity_n = manifest$total_n,
@@ -198,20 +301,25 @@ external_run_locus <- function(input_dir, entry, manifest, out, qc = EXTERNAL_QC
     n_snps = 0L, n_insertions = 0L, n_deletions = 0L, n_complex_indels = 0L, converged = FALSE,
     credible_sets = 0L, boundary_sensitive_credible_sets = 0L, s = NA_real_, diagnostic_outliers = NA_integer_,
     sensitivity_status = "not_run", sensitivity_max_abs_pip_difference = NA_real_, sensitivity_credible_sets = NA_integer_, warnings = character())
-  loaded <- external_capture(external_load_locus(input_dir, entry, manifest$total_n, qc))
+  loaded <- external_capture(external_select_variants(external_load_locus(input_dir, entry, manifest$total_n, qc), variant_types, qc))
   variants <- NULL; pip <- numeric(); sensitivity_pip <- numeric(); cs <- external_empty_cs(); sensitivity_cs <- external_empty_cs(); membership <- character()
   diagnostics <- data.frame(variant_id = character(), variant_type = character(), raw_z = numeric(), z = numeric(), condmean = numeric(), condvar = numeric(), z_std_diff = numeric(), logLR = numeric(), severe_outlier = logical())
   if (!is.null(loaded$error)) summary$reason <- loaded$error else {
     data <- loaded$value; variants <- data$variants; p <- nrow(variants); pip <- rep(NA_real_, p); sensitivity_pip <- pip; membership <- rep(NA_character_, p)
+    summary$n_source_variants <- data$source_counts$n_variants; summary$source_variant_counts <- data$source_counts
+    summary$selected_source_variant_indices <- as.list(data$source_variant_indices); summary$L <- min(qc$max_effects, p)
     summary$n_variants <- p; summary$n_snps <- sum(variants$variant_type == "SNP"); summary$n_insertions <- sum(variants$variant_type == "insertion"); summary$n_deletions <- sum(variants$variant_type == "deletion")
     summary$n_complex_indels <- sum(variants$variant_type == "complex_indel")
-    summary$minimum_external_p <- min(variants$pval)
+    summary$minimum_external_p <- if (p) min(variants$pval) else NA_real_
     summary$strong_external_association_in_window <- any(variants$pval <= qc$strong_association_p)
     summary$input_sha256 <- as.list(data$hashes); summary$minimum_LD_eigenvalue <- data$minimum_eigenvalue; summary$LD_eigenvalue_tolerance <- data$eigenvalue_tolerance
     summary$strong_boundary_signal <- any(variants$pval <= qc$strong_association_p & (variants$pos-data$window[1] <= qc$boundary_distance_bp | data$window[2]-variants$pos <= qc$boundary_distance_bp))
-    diagnostic_result <- external_capture(external_diagnostics(variants, data$R, manifest$effective_n, qc))
+    diagnostic_result <- external_capture({
+      if (p < 2L) stop("Insufficient selected variants: fewer than two remain after variant_types=", variant_types, "; model PIPs and credible sets are unavailable.")
+      external_diagnostics(variants, data$R, manifest$effective_n, qc)
+    })
     summary$warnings <- c(loaded$warnings, diagnostic_result$warnings)
-    if (!is.null(diagnostic_result$error)) { summary$status <- "unavailable_LD_diagnostics"; summary$reason <- diagnostic_result$error } else {
+    if (!is.null(diagnostic_result$error)) { summary$status <- if (p < 2L) "unavailable_too_few_selected_variants" else "unavailable_LD_diagnostics"; summary$reason <- diagnostic_result$error } else {
       d <- diagnostic_result$value; diagnostics <- d$table; summary$s <- d$s; summary$diagnostic_outliers <- d$outliers; summary$max_abs_standardized_residual <- d$max_abs_standardized_residual
       summary$status <- "unavailable_fit"
       primary <- external_capture({
@@ -264,25 +372,35 @@ external_run_locus <- function(input_dir, entry, manifest, out, qc = EXTERNAL_QC
     model_status = rep(summary$status, nrow(variants)), stringsAsFactors = FALSE))
   external_write_table(output, file.path(folder, "variant_pip.tsv")); external_write_table(cs, file.path(folder, "credible_sets.tsv"))
   external_write_table(sensitivity_cs, file.path(folder, "credible_sets_total_n.tsv")); external_write_table(diagnostics, file.path(folder, "diagnostics.tsv"))
-  external_plot(if (nrow(variants)) variants else NULL, pip, summary, file.path(folder, "external_finemapping.png"))
+  for (format in plot_options$formats) external_plot(if (nrow(variants)) variants else NULL, pip, summary, file.path(folder, paste0("external_finemapping.", format)), plot_options)
   summary$warnings <- unique(summary$warnings)
   external_json(summary, file.path(folder, "summary.json"))
   writeLines(c(paste(entry$locus_id, "WINDOW-LIMITED EXTERNAL FINE-MAPPING"), paste("Status:", summary$status),
     if (!is.null(summary$reason)) paste("Reason:", summary$reason),
     "These external GWAS estimates and model PIPs do not estimate cohort haplotype contrasts or establish causality.",
     if (summary$converged) sprintf("The primary model jointly fitted %d SNPs, %d insertions, %d deletions and %d complex indels within the supplied target window.", summary$n_snps, summary$n_insertions, summary$n_deletions, summary$n_complex_indels) else "No usable primary SuSiE model is reported: input validation, diagnostics or model fitting did not complete successfully; consult the status and reason.",
+    sprintf("Variant selection: %s; %s source variants passed full input validation, %d selected variants retained. SNP-only and indel-only fits condition on the selected class and cannot establish absence of effects in the omitted class.", variant_types, if (is.na(summary$n_source_variants)) "unknown" else summary$n_source_variants, summary$n_variants),
+    sprintf("Model settings: maximum effects %d (limited to retained variant count), coverage %g%%, maximum iterations %d.", qc$max_effects, 100*qc$coverage, qc$max_iter),
     "Variants outside the window or absent from the reference panel are not covered.",
     "The independent LD matrix is used without shrinkage, automatic allele flipping, or removal of diagnostic outliers.",
-    "PIPs and 95% credible sets are exploratory and conditional on the variants, LD, model and window; no credible set is a validated causal-candidate set.",
+    sprintf("PIPs and %g%% credible sets are exploratory and conditional on the selected variants, LD, model and window; no credible set is a validated causal-candidate set.", 100*qc$coverage),
     "External beta intervals use beta +/- 1.959964 * SE, are pointwise normal approximations, and are distinct from SuSiE credible sets.",
     "The binary-trait z=beta/SE RSS approximation uses balanced case-control effective N=4/(1/n_cases+1/n_controls), with a separate nominal total-N sensitivity fit. Neither N is a measured per-variant sample count.",
     "Credible sets near the window boundary are flagged; wider-region analysis is required before treating a locus as resolved."), file.path(folder, "INTERPRETATION.txt"))
   summary
 }
 
-run_external_finemapping <- function(input_dir, out, workers = 4L, locus = NULL) {
+run_external_finemapping <- function(input_dir = NULL, out = NULL, workers = 4L, locus = NULL,
+    max_effects = 10L, coverage = .95, max_iter = 200L, variant_types = "both",
+    plot_width = 1800L, plot_height = 1150L, plot_dpi = 150L, plot_formats = "png", config = NULL) {
   for (package in c("susieR", "jsonlite", "openssl")) if (!requireNamespace(package, quietly = TRUE)) stop("Required R package missing: ", package)
-  if (length(workers) != 1L || !is.finite(workers) || workers < 1 || workers != floor(workers)) stop("workers must be a positive integer.")
+  arguments <- list(input_dir = input_dir, out = out, workers = workers, locus = locus,
+    max_effects = max_effects, coverage = coverage, max_iter = max_iter, variant_types = variant_types,
+    plot_width = plot_width, plot_height = plot_height, plot_dpi = plot_dpi, plot_formats = plot_formats)
+  supplied <- setdiff(names(match.call())[-1L], "config")
+  resolved <- external_resolve_options(arguments[supplied], config)
+  options <- resolved$options; configuration <- resolved$config
+  input_dir <- options$input_dir; out <- options$out; workers <- options$workers; locus <- options$locus
   manifest <- external_manifest(input_dir)
   script_hash <- external_sha256(EXTERNAL_SCRIPT_PATH)
   entries <- manifest$data$loci
@@ -290,30 +408,46 @@ run_external_finemapping <- function(input_dir, out, workers = 4L, locus = NULL)
     entries <- Filter(function(x) x$locus_id == locus, entries)
     if (length(entries) != 1L) stop("Requested locus is not uniquely present in the input manifest.")
   }
-  if (dir.exists(out) && length(list.files(out, all.files = TRUE, no.. = TRUE))) stop("Use a new or empty output directory; previous runs are preserved.")
+  if (file.exists(out) && (!dir.exists(out) || length(list.files(out, all.files = TRUE, no.. = TRUE)))) stop("Use a new or empty output directory; previous runs are preserved.")
   dir.create(out, recursive = TRUE, showWarnings = FALSE)
-  file.copy(manifest$path, file.path(out, "source_input_manifest.json"), overwrite = FALSE)
-  file.copy(EXTERNAL_SCRIPT_PATH, file.path(out, "finemap_external.R"), overwrite = FALSE)
+  input_dir <- normalizePath(input_dir, mustWork = TRUE); out <- normalizePath(out, mustWork = TRUE)
+  if (!file.copy(manifest$path, file.path(out, "source_input_manifest.json"), overwrite = FALSE) ||
+      !file.copy(EXTERNAL_SCRIPT_PATH, file.path(out, "finemap_external.R"), overwrite = FALSE)) stop("Unable to preserve source manifest or script.")
+  config_record <- NULL
+  if (!is.null(configuration)) {
+    snapshot <- file.path(out, "source_configuration.json")
+    if (!file.copy(configuration$path, snapshot, overwrite = FALSE) || external_sha256(snapshot) != configuration$sha256) stop("Configuration changed before snapshot or could not be copied.")
+    config_record <- list(path = configuration$path, sha256 = configuration$sha256, snapshot = "source_configuration.json")
+  }
+  qc <- EXTERNAL_QC
+  qc$max_effects <- options$max_effects; qc$coverage <- options$coverage; qc$max_iter <- options$max_iter
+  plot_options <- list(width = options$plot_width, height = options$plot_height, dpi = options$plot_dpi, formats = options$plot_formats)
+  effective_settings <- list(paths = list(input_dir = input_dir, out = out),
+    analysis = options[c("workers", "locus", "max_effects", "coverage", "max_iter", "variant_types")], plot = plot_options)
+  effective_settings$plot$formats <- as.list(plot_options$formats)
+  external_json(effective_settings, file.path(out, "effective_settings.json"))
   # Fixed per-locus computations and exact CS purity avoid worker-dependent sampling.
-  summaries <- parallel::mclapply(entries, function(entry) external_run_locus(input_dir, entry, manifest, out),
-    mc.cores = min(as.integer(workers), length(entries)), mc.preschedule = FALSE)
+  summaries <- parallel::mclapply(entries, function(entry) external_run_locus(input_dir, entry, manifest, out, qc, options$variant_types, plot_options),
+    mc.cores = min(workers, length(entries)), mc.preschedule = FALSE)
   if (any(vapply(summaries, inherits, logical(1), "try-error"))) stop("A worker failed outside the scientific status handling; run is incomplete.")
   if (external_sha256(manifest$path) != manifest$sha256) stop("Input manifest changed during analysis; run is incomplete.")
   if (external_sha256(EXTERNAL_SCRIPT_PATH) != script_hash) stop("Fitting script changed during analysis; run is incomplete.")
-  columns <- c("locus_id", "status", "n_variants", "n_snps", "n_insertions", "n_deletions", "n_complex_indels", "converged", "credible_sets", "boundary_sensitive_credible_sets", "s", "diagnostic_outliers", "sensitivity_status", "sensitivity_max_abs_pip_difference", "sensitivity_credible_sets")
+  if (!is.null(configuration) && external_sha256(configuration$path) != configuration$sha256) stop("Configuration changed during analysis; run is incomplete.")
+  columns <- c("locus_id", "status", "variant_types", "n_source_variants", "n_variants", "n_snps", "n_insertions", "n_deletions", "n_complex_indels", "converged", "credible_sets", "boundary_sensitive_credible_sets", "s", "diagnostic_outliers", "sensitivity_status", "sensitivity_max_abs_pip_difference", "sensitivity_credible_sets")
   table <- do.call(rbind, lapply(summaries, function(x) as.data.frame(x[columns], stringsAsFactors = FALSE)))
   external_write_table(table, file.path(out, "locus_summary.tsv"))
-  qc <- EXTERNAL_QC
   record <- list(analysis = "exploratory_window_limited_external_SuSiE_RSS", private_results = TRUE,
-    input_dir = normalizePath(input_dir), input_manifest_sha256 = manifest$sha256, source_provenance = manifest$data$provenance,
-    script_sha256 = script_hash,
-    requested_locus = locus, loci_attempted = length(entries), loci_total = length(manifest$data$loci), workers = as.integer(workers),
+    input_dir = input_dir, input_manifest_sha256 = manifest$sha256, source_provenance = manifest$data$provenance,
+    script_sha256 = script_hash, configuration = config_record, effective_settings = effective_settings,
+    requested_locus = locus, loci_attempted = length(entries), loci_total = length(manifest$data$loci), workers = workers,
+    variant_types = options$variant_types,
+    variant_selection_note = "All source variants and full LD pass validation before matched row/column selection; class-restricted fits cannot evaluate omitted variant classes.",
     n_cases = manifest$data$n_cases, n_controls = manifest$data$n_controls, total_n = manifest$total_n, effective_n = manifest$effective_n,
     sample_size_basis = "Nominal study-level case/control totals; gwas_n is not a measured per-variant sample size.",
     primary_n = manifest$effective_n, primary_n_basis = "4 / (1/n_cases + 1/n_controls)", sensitivity_n = manifest$total_n,
     sample_size_method_note = "Balanced effective N is the primary binary-trait RSS approximation, also used in published workflows such as eLife 88768; this is not a universal model requirement. Nominal total N is retained as sensitivity analysis.",
     binary_trait_approximation = TRUE, z_score = "ALT beta / SE", residual_variance_estimated = FALSE,
-    L = "min(10, number of matched variants)", max_iter = qc$max_iter, coverage = qc$coverage,
+    L = sprintf("min(%d, number of selected variants)", qc$max_effects), max_effects = qc$max_effects, max_iter = qc$max_iter, coverage = qc$coverage,
     prior_tol = eval(formals(susieR::susie_suff_stat)$prior_tol), LD_shrinkage = FALSE,
     automated_allele_flips = FALSE, diagnostic_outlier_removal = FALSE, thresholds = qc,
     diagnostic_threshold_note = "Conservative reporting heuristics, not calibrated association significance tests or universally validated mismatch thresholds. s>=0.5, invalid/nonfinite diagnostics or unconverged fits have no PIPs; milder finite diagnostic warnings remain explicitly exploratory.",
@@ -321,24 +455,58 @@ run_external_finemapping <- function(input_dir, out, workers = 4L, locus = NULL)
     R_version = R.version.string, packages = as.list(vapply(c("susieR", "jsonlite", "openssl"), function(x) as.character(packageVersion(x)), character(1))),
     methods = as.list(EXTERNAL_METHODS), status_counts = as.list(table(table$status)),
     completed_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE))
+  index <- c("# Window-limited external fine-mapping", "",
+    "External GWAS beta estimates and exploratory model probabilities. No cohort haplotype associations or validated causal variants are asserted.", "",
+    sprintf("Variant selection: **%s**. Maximum effects: %d; credible-set coverage: %g%%; maximum iterations: %d. External beta intervals remain pointwise 95%% intervals.", options$variant_types, qc$max_effects, 100*qc$coverage, qc$max_iter), "",
+    "| Region | Status | Source variants | Selected variants | SNPs | Insertions | Deletions | Complex indels | Figure | Model details |", "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |")
+  for (x in summaries) {
+    links <- paste(sprintf("[%s](%s/external_finemapping.%s)", toupper(plot_options$formats), x$locus_id, plot_options$formats), collapse = ", ")
+    index <- c(index, sprintf("| %s | %s | %s | %d | %d | %d | %d | %d | %s | [Interpretation](%s/INTERPRETATION.txt), [PIPs](%s/variant_pip.tsv), [QC](%s/summary.json) |", x$locus_id, x$status, if (is.na(x$n_source_variants)) "unknown" else x$n_source_variants, x$n_variants, x$n_snps, x$n_insertions, x$n_deletions, x$n_complex_indels, links, x$locus_id, x$locus_id, x$locus_id))
+  }
+  writeLines(index, file.path(out, "index.md"))
   outputs <- list.files(out, recursive = TRUE, full.names = TRUE)
   record$output_sha256 <- as.list(setNames(vapply(outputs, external_sha256, character(1)), substring(outputs, nchar(out)+2L)))
   external_json(record, file.path(out, "run_manifest.json"))
-  index <- c("# Window-limited external SNP and indel fine-mapping", "",
-    "External GWAS beta estimates and exploratory model probabilities. No cohort haplotype associations or validated causal variants are asserted.", "",
-    "| Region | Status | SNPs | Insertions | Deletions | Complex indels | Figure | Model details |", "| --- | --- | ---: | ---: | ---: | ---: | --- | --- |")
-  for (x in summaries) index <- c(index, sprintf("| %s | %s | %d | %d | %d | %d | [PNG](%s/external_finemapping.png) | [Interpretation](%s/INTERPRETATION.txt), [PIPs](%s/variant_pip.tsv), [QC](%s/summary.json) |", x$locus_id, x$status, x$n_snps, x$n_insertions, x$n_deletions, x$n_complex_indels, x$locus_id, x$locus_id, x$locus_id, x$locus_id))
-  writeLines(index, file.path(out, "index.md")); writeLines("Completed external exploratory fitting; consult per-locus status.", file.path(out, "COMPLETED.txt"))
+  writeLines("Completed external exploratory fitting; consult per-locus status.", file.path(out, "COMPLETED.txt"))
   invisible(record)
 }
 
-if (sys.nframe() == 0L) {
-  argv <- commandArgs(TRUE)
-  if (length(argv) %% 2L || !length(argv)) stop("Use --input-dir PREPARED --out NEW_DIRECTORY [--workers 4] [--locus LOCUS].")
+external_help <- function() c(
+  "Usage: Rscript code/R/finemap_external.R --input-dir PREPARED --out NEW_DIRECTORY [options]",
+  "       Rscript code/R/finemap_external.R --config CONFIG.json [overrides]",
+  "",
+  "--config PATH          Explicit JSON configuration; no config is loaded automatically.",
+  "--input-dir PATH       Prepared directory containing input_manifest.json.",
+  "--out PATH             New or empty output directory; earlier results are preserved.",
+  "--workers INTEGER      Parallel loci (default 4).",
+  "--locus ID             One locus; omitted means all manifest loci.",
+  "--max-effects INTEGER  Maximum SuSiE effects, capped by variant count (default 10).",
+  "--coverage NUMBER      Credible-set coverage strictly between 0 and 1 (default 0.95).",
+  "--max-iter INTEGER     Maximum SuSiE iterations (default 200).",
+  "--variant-types VALUE  both, snps or indels (default both); full input validated first.",
+  "--plot-width INTEGER   Raster width in pixels (default 1800).",
+  "--plot-height INTEGER  Raster height in pixels (default 1150).",
+  "--plot-dpi INTEGER     Raster resolution; vector inches = pixels / dpi (default 150).",
+  "--plot-formats LIST    Comma-separated png,pdf,svg (default png).",
+  "--help                 Print help without loading inputs or fitting.",
+  "",
+  "JSON sections: paths {input_dir,out}; analysis {workers,locus,max_effects,coverage,max_iter,variant_types};",
+  "plot {width,height,dpi,formats}, with formats a JSON array (for example [\"png\",\"pdf\"]).",
+  "CLI overrides JSON. JSON paths are relative to its directory; CLI/R overrides use the working directory.",
+  "RStudio: source('code/R/finemap_external.R'); run_external_finemapping_config('config.json', overrides=list(out='new_run')).",
+  "Provenance, genotype, allele and LD QC gates are fixed and cannot be disabled by configuration.")
+external_cli <- function(argv = commandArgs(TRUE)) {
+  if (identical(argv, "--help")) { cat(paste(external_help(), collapse = "\n"), "\n"); return(invisible(NULL)) }
+  if (!length(argv) || length(argv) %% 2L) stop("Arguments require --option value pairs. Use --help for options.")
   keys <- argv[seq(1L, length(argv), 2L)]
-  if (anyDuplicated(keys) || any(!keys %in% c("--input-dir", "--out", "--workers", "--locus"))) stop("Unknown or duplicate argument.")
+  allowed <- c("--config", paste0("--", gsub("_", "-", names(EXTERNAL_DEFAULTS))))
+  if (anyDuplicated(keys) || any(!keys %in% allowed)) stop("Unknown or duplicate argument. Use --help for supported options.")
   args <- as.list(argv[seq(2L, length(argv), 2L)]); names(args) <- gsub("-", "_", sub("^--", "", keys))
-  if (is.null(args$input_dir) || is.null(args$out)) stop("--input-dir and --out are required.")
-  if (!is.null(args$workers)) args$workers <- suppressWarnings(as.numeric(args$workers))
+  for (key in intersect(names(args), c("workers", "max_effects", "coverage", "max_iter", "plot_width", "plot_height", "plot_dpi"))) args[[key]] <- suppressWarnings(as.numeric(args[[key]]))
+  if ("plot_formats" %in% names(args)) {
+    if (!grepl("^[a-z]+(,[a-z]+)*$", args$plot_formats)) stop("--plot-formats requires comma-separated png,pdf,svg without empty entries.")
+    args$plot_formats <- strsplit(args$plot_formats, ",", fixed = TRUE)[[1]]
+  }
   do.call(run_external_finemapping, args)
 }
+if (sys.nframe() == 0L) external_cli()

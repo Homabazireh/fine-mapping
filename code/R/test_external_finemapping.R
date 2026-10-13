@@ -26,7 +26,7 @@ write_fixture <- function(v = variants, r = R, entry = source_entry, m = manifes
   con <- gzfile(file.path(input, entry$ld_file), "wt"); write.table(r, con, sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE, na = "NA"); close(con)
   entry$variants_sha256 <- external_sha256(file.path(input, entry$variants_file)); entry$ld_sha256 <- external_sha256(file.path(input, entry$ld_file))
   m$loci <- list(entry); external_json(m, file.path(input, "input_manifest.json"))
-  external_manifest(input)
+  invisible(external_manifest(input))
 }
 load_fixture <- function(m) external_load_locus(input, m$data$loci[[1]], m$total_n)
 m <- write_fixture(); good <- load_fixture(m)
@@ -152,5 +152,129 @@ parallel_out <- file.path(folder, "parallel"); batch <- run_external_finemapping
 parallel_pip <- read.delim(file.path(parallel_out, "SYNTHETIC_B", "variant_pip.tsv"))
 assert(batch$loci_attempted == 2 && max(abs(parallel_pip$pip-pip$pip)) < 1e-12, "Parallel batch disagrees with pilot")
 assert(identical(read.delim(file.path(parallel_out, "locus_summary.tsv"))$locus_id, c("SYNTHETIC", "SYNTHETIC_B")), "Batch lost manifest locus order")
+# Explicit JSON defaults reproduce the same model, with exact configuration provenance.
+m <- write_fixture()
+config_dir <- file.path(folder, "configuration files"); dir.create(config_dir)
+config_path <- file.path(config_dir, "model options.json")
+config <- list(paths = list(input_dir = "../input", out = "../configured"),
+  analysis = list(workers = 1, locus = "SYNTHETIC", max_effects = 10, coverage = .95, max_iter = 200, variant_types = "both"),
+  plot = list(width = 1800, height = 1150, dpi = 150, formats = list("png")))
+external_json(config, config_path)
+configured <- run_external_finemapping_config(config_path)
+configured_out <- file.path(folder, "configured")
+configured_pip <- read.delim(file.path(configured_out, "SYNTHETIC", "variant_pip.tsv"))
+assert(max(abs(configured_pip$pip-pip$pip)) < 1e-12 && max(abs(configured_pip$pip_total_n-pip$pip_total_n)) < 1e-12, "Explicit default configuration changed PIPs")
+assert(identical(read.delim(file.path(configured_out, "SYNTHETIC", "credible_sets.tsv")), cs), "Explicit default configuration changed credible sets")
+assert(configured$configuration$sha256 == external_sha256(config_path) && external_sha256(file.path(configured_out, configured$configuration$snapshot)) == external_sha256(config_path), "Exact configuration snapshot/hash lost")
+assert(configured$effective_settings$paths$input_dir == normalizePath(input) && configured$effective_settings$paths$out == normalizePath(configured_out), "JSON paths did not resolve from its directory")
+assert(identical(configured$thresholds, run$thresholds), "Default configuration altered fixed QC thresholds")
+assert(identical(external_resolve_options(config = file.path(configured_out, "effective_settings.json"))$options$plot_formats, "png"), "Effective settings are not reusable configuration")
+
+# Actual CLI overrides reach both models, credible sets and raster/vector output.
+custom_out <- file.path(folder, "custom")
+custom <- external_cli(c("--config", config_path, "--out", custom_out, "--workers", "1", "--max-effects", "2", "--coverage", "0.8",
+  "--max-iter", "25", "--plot-width", "1200", "--plot-height", "800", "--plot-dpi", "100", "--plot-formats", "png,pdf,svg"))
+custom_summary <- jsonlite::fromJSON(file.path(custom_out, "SYNTHETIC", "summary.json"))
+assert(custom$max_effects == 2 && custom$coverage == .8 && custom$max_iter == 25 && custom_summary$L == 2 && custom_summary$max_iter == 25, "CLI overrides did not reach output settings")
+for (name in c("model_effective_n.rds", "model_total_n.rds")) {
+  fit <- readRDS(file.path(custom_out, "SYNTHETIC", name))
+  assert(nrow(fit$alpha) == 2 && fit$sets$requested_coverage == .8 && fit$niter <= 25, "Model did not use requested effect count, coverage or iterations")
+}
+png_dimensions <- function(path) {
+  con <- file(path, "rb"); on.exit(close(con)); header <- readBin(con, "raw", 24L)
+  c(sum(as.integer(header[17:20])*256^(3:0)), sum(as.integer(header[21:24])*256^(3:0)))
+}
+assert(identical(png_dimensions(file.path(custom_out, "SYNTHETIC", "external_finemapping.png")), c(1200, 800)), "PNG pixel dimensions ignored")
+assert(identical(png_dimensions(file.path(configured_out, "SYNTHETIC", "external_finemapping.png")), c(1800, 1150)), "Default PNG dimensions changed")
+vector_pdf <- suppressWarnings(readLines(file.path(custom_out, "SYNTHETIC", "external_finemapping.pdf"), warn = FALSE, skipNul = TRUE))
+vector_svg <- readLines(file.path(custom_out, "SYNTHETIC", "external_finemapping.svg"), warn = FALSE)
+assert(any(grepl("/MediaBox [0 0 864 576]", vector_pdf, fixed = TRUE, useBytes = TRUE)) && any(grepl('width="864(pt)?" height="576(pt)?"', vector_svg)), "Vector dimensions must be pixels / DPI in inches")
+custom_text <- readLines(file.path(custom_out, "SYNTHETIC", "INTERPRETATION.txt"))
+assert(any(grepl("80% credible sets", custom_text, fixed = TRUE)) && !any(grepl("95% credible sets", custom_text, fixed = TRUE)), "Credible-set interpretation retained stale coverage")
+assert(any(grepl("beta +/- 1.959964 * SE", custom_text, fixed = TRUE)), "Changing CS coverage altered external beta interval semantics")
+assert(all(vapply(c("PNG", "PDF", "SVG"), function(x) any(grepl(paste0("[", x, "]("), readLines(file.path(custom_out, "index.md")), fixed = TRUE)), logical(1))), "Index omitted selected formats")
+# CWD-relative overrides are distinct from config-relative defaults, including the source() helper.
+cwd <- getwd(); setwd(folder)
+helper <- run_external_finemapping_config(config_path, overrides = list(out = "helper_relative", plot_formats = "pdf", max_effects = 1L))
+setwd(cwd)
+assert(helper$effective_settings$paths$out == normalizePath(file.path(folder, "helper_relative")), "R helper override path was incorrectly relative to config directory")
+assert(file.exists(file.path(folder, "helper_relative", "SYNTHETIC", "external_finemapping.pdf")) && !file.exists(file.path(folder, "helper_relative", "SYNTHETIC", "external_finemapping.png")), "Unrequested PNG was manufactured")
+assert(!any(grepl("[PNG]", readLines(file.path(folder, "helper_relative", "index.md")), fixed = TRUE)), "Index links to unrequested PNG")
+
+# Selection uses the matching source rows/columns, including a freshly correct eigendecomposition.
+good <- load_fixture(write_fixture())
+for (selection in c("snps", "indels")) {
+  selected <- external_select_variants(good, selection)
+  indices <- which(if (selection == "snps") good$variants$variant_type == "SNP" else good$variants$variant_type != "SNP")
+  assert(identical(selected$variants$variant_id, good$variants$variant_id[indices]) && max(abs(selected$R-R[indices, indices])) < 1e-12, "Variant class subset broke LD alignment")
+  decomposition <- attr(selected$R, "eigen")
+  assert(max(abs(decomposition$vectors %*% diag(decomposition$values) %*% t(decomposition$vectors)-selected$R)) < 1e-10, "Subset reused stale full-LD eigenvectors")
+  subset_out <- file.path(folder, selection)
+  result <- run_external_finemapping(input, subset_out, 1, variant_types = selection, max_effects = 2)
+  subset_pip <- read.delim(file.path(subset_out, "SYNTHETIC", "variant_pip.tsv"))
+  subset_summary <- jsonlite::fromJSON(file.path(subset_out, "SYNTHETIC", "summary.json"))
+  assert(identical(subset_pip$variant_id, good$variants$variant_id[indices]) && subset_summary$n_source_variants == 8 && subset_summary$n_variants == length(indices), "Source/selected counts or class rows incorrect")
+  assert(identical(as.integer(subset_summary$selected_source_variant_indices), indices), "Source index provenance missing")
+  subset_qc <- EXTERNAL_QC; subset_qc$max_effects <- 2L
+  expected <- external_usable_fit(external_fit(selected$variants$beta/selected$variants$se, selected$R, m$effective_n, subset_qc), length(indices))
+  assert(all(is.finite(subset_pip$pip)) && max(abs(expected-subset_pip$pip)) < 1e-12, "Class-specific fit used incorrect matrix or variant ordering")
+}
+# Neither an invalid omitted variant nor invalid cross-class LD can escape full validation.
+bad <- variants; bad$se[2] <- 0; write_fixture(bad)
+subset_bad <- file.path(folder, "subset_bad_variant"); run_external_finemapping(input, subset_bad, 1, variant_types = "snps")
+assert(jsonlite::fromJSON(file.path(subset_bad, "SYNTHETIC", "summary.json"))$status == "unavailable_input_validation", "Class selection bypassed invalid omitted variant")
+bad_R <- R; bad_R[1, 2] <- NA; write_fixture(r = bad_R)
+subset_bad_ld <- file.path(folder, "subset_bad_ld"); run_external_finemapping(input, subset_bad_ld, 1, variant_types = "snps")
+assert(jsonlite::fromJSON(file.path(subset_bad_ld, "SYNTHETIC", "summary.json"))$status == "unavailable_input_validation", "Class selection bypassed invalid cross-class LD")
+# Zero or one selected variant remains explicitly unavailable, with any available external beta preserved.
+for (n_selected in c(0L, 1L)) {
+  few <- variants; few$ref[2:3] <- "A"; few$alt[2:3] <- "T"; few$variant_type[2:3] <- "SNP"
+  if (n_selected == 1L) { few$alt[2] <- "AT"; few$variant_type[2] <- "INDEL" }
+  write_fixture(few); few_out <- file.path(folder, paste0("few_", n_selected))
+  run_external_finemapping(input, few_out, 1, variant_types = "indels", plot_formats = c("png", "pdf"))
+  few_summary <- jsonlite::fromJSON(file.path(few_out, "SYNTHETIC", "summary.json"))
+  few_pip <- read.delim(file.path(few_out, "SYNTHETIC", "variant_pip.tsv"))
+  assert(few_summary$status == "unavailable_too_few_selected_variants" && few_summary$n_source_variants == 8 && few_summary$n_variants == n_selected, "Insufficient selected variants mislabeled")
+  assert(nrow(few_pip) == n_selected && all(is.na(few_pip$pip)) && !file.exists(file.path(few_out, "SYNTHETIC", "model_effective_n.rds")), "Insufficient selected variants manufactured PIPs")
+  if (n_selected) assert(few_pip$beta == variants$beta[2], "Unavailable model erased an observed external beta")
+  assert(file.info(file.path(few_out, "SYNTHETIC", "external_finemapping.png"))$size > 1000 && grepl("Insufficient selected variants", few_summary$reason, fixed = TRUE), "Insufficient-selection figure/reason missing")
+}
+write_fixture()
+# max_iter reaches the actual call: forced one-iteration nonconvergence cannot expose internal PIPs.
+iteration_out <- file.path(folder, "iteration_limit")
+run_external_finemapping(input, iteration_out, 1, max_iter = 1)
+iteration_summary <- jsonlite::fromJSON(file.path(iteration_out, "SYNTHETIC", "summary.json"))
+assert(iteration_summary$status == "unavailable_fit" && iteration_summary$max_iter == 1 && all(is.na(read.delim(file.path(iteration_out, "SYNTHETIC", "variant_pip.tsv"))$pip)), "Requested iteration limit not applied to convergence gate")
+
+# Strict option/schema validation rejects typos, unsafe types and attempts to configure fixed gates.
+base <- list(input_dir = input, out = file.path(folder, "unused"))
+invalid_options <- list(list(workers = 0), list(workers = TRUE), list(workers = 1.5), list(max_effects = 0), list(max_effects = Inf),
+  list(coverage = 0), list(coverage = 1), list(coverage = NA_real_), list(coverage = "0.9"), list(max_iter = -1),
+  list(plot_width = 0), list(plot_height = c(600, 700)), list(plot_dpi = Inf), list(plot_formats = c("png", "png")),
+  list(plot_formats = "jpg"), list(plot_formats = character()), list(variant_types = "snp"), list(locus = "../unsafe"), list(s_block = 1))
+for (bad_options in invalid_options) fails(external_resolve_options(c(base, bad_options)), "Invalid setting accepted")
+bad_configs <- list(list(qc = list(s_block = 1)), list(analysis = list(residual_variance = TRUE)), list(plot = list(formats = "png")),
+  list(plot = list(formats = list(named = "png"))), list(paths = list(input_dir = NULL)), list(analysis = list(workers = "2")))
+bad_config_path <- file.path(config_dir, "invalid.json")
+for (bad_config in bad_configs) {
+  external_json(bad_config, bad_config_path)
+  fails(external_resolve_options(base, bad_config_path), "Invalid JSON setting accepted")
+}
+writeLines('{"analysis":{"coverage":0.8,"coverage":0.9}}', bad_config_path)
+fails(external_resolve_options(base, bad_config_path), "Duplicate JSON keys accepted")
+fails(external_cli(c("--out", "unused", "--disable-qc", "true")), "Unknown CLI QC bypass accepted")
+fails(external_cli(c("--workers", "1", "--workers", "2")), "Duplicate CLI argument accepted")
+fails(external_cli(c("--plot-formats", "png,")), "Empty trailing format accepted")
+fails(external_cli("--input-dir"), "Missing argument value accepted")
+fails(run_external_finemapping_config(config_path, overrides = list(qc = list(s_block = 1))), "R helper QC bypass accepted")
+# Configuration mutation leaves an incomplete run, with no misleading completion marker.
+external_fit <- function(...) { result <- real_fit(...); cat(" ", file = config_path, append = TRUE); result }
+mutation_out <- file.path(folder, "configuration_changed")
+fails(run_external_finemapping_config(config_path, list(out = mutation_out)), "Changed configuration was certified complete", "Configuration changed during analysis")
+external_fit <- real_fit
+assert(!file.exists(file.path(mutation_out, "COMPLETED.txt")), "Changed configuration retained completion marker")
+# Help is standalone and sourcing above did not execute the CLI.
+help_output <- system2(file.path(R.home("bin"), "Rscript"), c(shQuote(EXTERNAL_SCRIPT_PATH), "--help"), stdout = TRUE, stderr = TRUE)
+assert(is.null(attr(help_output, "status")) && all(vapply(c("--config", "--max-effects", "--variant-types", "--plot-formats", "RStudio"), function(x) any(grepl(x, help_output, fixed = TRUE)), logical(1))), "Standalone CLI help failed or omitted key options")
 on.exit_cleanup()
-cat("PASS: synthetic joint SNP/indel SuSiE signal, LD and hash/order validation, effective-N sensitivity, boundary CS, mismatch/nonconvergence/input-change gates, private plots and preserved runs.\n")
+cat("PASS: joint SNP/indel SuSiE; fixed provenance/LD gates; configuration/default parity; CLI/RStudio overrides; exact config snapshots; selected LD alignment; insufficient variants; configurable models and PNG/PDF/SVG; preserved runs.\n")

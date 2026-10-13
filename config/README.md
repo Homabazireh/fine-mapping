@@ -28,3 +28,21 @@ verified against the same build; configuration does not perform liftover.
 settings does not automatically assign groups. The configured metadata source is your final
 `data/raw/participant_groups_final.tsv`, with `name` identifiers and
 `Diabetes_Group` categories. Prepare `data/intermediate/samples.tsv` using exact VCF IDs and independently verified aliases. Preserve source metadata and review records privately. If a saved preflight summary is used, verify that its metadata checksum matches the selected authoritative source.
+
+## R workflow and external fine-mapping settings
+
+- [external_finemapping.json](external_finemapping.json) controls the separate
+  external R model and its figure export. Run
+  `Rscript code/R/finemap_external.R --config config/external_finemapping.json`.
+- [R_workflow.example.json](R_workflow.example.json) selects a native R analysis
+  or plotting action. Inspect it using
+  `Rscript code/R/run_configured_analysis.R --config config/R_workflow.example.json --dry-run`.
+
+These two R configuration files resolve paths from the configuration directory;
+`settings.json` retains its existing project-root path rule. CLI overrides use
+the current working directory. Only the selected workflow action runs. Edit a
+copy and use a new output directory for each model or display change.
+
+[Full option table and RStudio examples](../docs/R_options.md) explain which
+settings change model probabilities, which only change figures, and which
+scientific quality requirements remain fixed.

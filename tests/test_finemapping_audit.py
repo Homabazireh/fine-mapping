@@ -114,8 +114,24 @@ class FineMappingAuditTests(unittest.TestCase):
         self.assertFalse(result["legacy_method"]["available"])
         self.assertEqual(result["resolved_candidate_variants"], 0)
 
+    def test_descriptive_panels_are_reported_without_association_or_causal_claims(self):
+        lead = {**self.lead, "selected_markers": "3", "status": "analysed"}
+        table(self.run / "lead_loci.tsv", list(lead), [lead])
+        result = audit_finemapping(self.run, self.gwas, self.legacy, self.out)
+        self.assertEqual(result["cohort_selected_marker_panels"], 1)
+        self.assertEqual(result["cohort_haplotype_association_tests"], 0)
+        self.assertEqual(result["resolved_candidate_variants"], 0)
+        self.assertIn("1 selected marker panels (descriptive only)", (self.out / "REPORT.txt").read_text())
+
+    def test_tested_table_cannot_be_hidden_by_zero_summary_count(self):
+        table(self.run / "haplotype_comparisons.tsv", ["test_status"], [{"test_status": "tested_unadjusted"}])
+        with self.assertRaisesRegex(ValueError, "tested haplotypes"):
+            audit_finemapping(self.run, self.gwas, self.legacy, self.out)
+        self.assertFalse(self.out.exists())
+
     def test_synthetic_incomplete_or_tested_cohorts_are_rejected(self):
-        for update in ({"synthetic": True}, {"haplotype_carrier_tests_performed": 1}):
+        for update in ({"synthetic": True}, {"haplotype_carrier_tests_performed": 1},
+                       {"haplotype_overall_tests_performed": 1}, {"inputs_stable_during_read": False}):
             (self.run / "run_summary.json").write_text(json.dumps({**self.summary, **update}))
             with self.assertRaises(ValueError):
                 audit_finemapping(self.run, self.gwas, self.legacy, self.out)

@@ -27,11 +27,17 @@ Marker panels use the same variants in every group. A participant with more than
   --run-dir results/all_regions_run --out results/all_regions_run/panel_c
 .venv/bin/python code/plot_haplotype_contrasts.py \
   --run-dir results/all_regions_run --out results/all_regions_run/contrasts
+.venv/bin/python code/plot_all_regions.py \
+  --run-dir results/all_regions_run --out results/all_regions_run/regions --workers 4
+.venv/bin/python code/plot_descriptive_haplotypes.py \
+  --run-dir results/all_regions_run --out results/all_regions_run/descriptive_haplotypes
 ```
 
 Panel C displays lead-genotype completeness. It must not be described as a haplotype frequency plot. The contrast figure displays eligible carrier-frequency differences with confidence intervals and adjusted p-values, or an explicit reason why an estimate is unavailable.
 
-The all-region plotting script documents its CLI in `--help`. It draws a separate picture for each region using regional marker tables. Completeness is called participants divided by the full group size. Regional ALT frequency is ALT copies divided by called chromosomes; it is conditional on successful calls and can be biased when calls are selective. Missing frequencies remain unavailable. Regional scatterplots do not establish phase, shared ancestry, association or causality.
+The all-region plotting script draws a separate picture for each region using every available passing biallelic SNP in its saved window. It records omitted indels and multiallelic sites explicitly and preserves the full regional allele table. Completeness is called participants divided by the full group size. Regional ALT frequency is ALT copies divided by called chromosomes; it is conditional on successful calls and can be biased when calls are selective. Missing frequencies remain unavailable. Regional scatterplots do not establish phase, shared ancestry, association or causality.
+
+When descriptive haplotype panels exist but inference remains unavailable, `plot_descriptive_haplotypes.py` shows every observed local pattern: three chromosome-copy frequencies and two descriptive disease-minus-Control differences. It recalculates fractions from counts and reports resolution denominators. The picture does not assign p-values, confidence intervals or significance to these untested differences.
 
 The optional report workflow is `code/build_report.py --run-dir RUN --no-preflight --output-dir OUTPUT --render`; rendering needs Quarto. Reports and embedded images are private outputs. The original example-region selector in the legacy report is a layout example; use the dedicated all-region workflow for exhaustive regional exports.
 

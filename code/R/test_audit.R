@@ -74,12 +74,29 @@ for (path in list.files(out, full.names = TRUE)) {
 }
 expect_error(audit_finemapping(run, gwas, legacy, out))
 
+# A selected panel can supply descriptive frequencies without an association.
+descriptive_lead <- lead; descriptive_lead$selected_markers <- "3"; descriptive_lead$status <- "analysed"
+write_rows(file.path(run, "lead_loci.tsv"), list(descriptive_lead), names(descriptive_lead))
+descriptive <- audit_finemapping(run, gwas, legacy, file.path(temporary, "descriptive"))
+assert(descriptive$cohort_selected_marker_panels == 1L && descriptive$cohort_haplotype_association_tests == 0L,
+  "Descriptive panel count or association boundary lost")
+assert(descriptive$resolved_candidate_variants == 0L, "Descriptive panel became causal evidence")
+write_rows(file.path(run, "lead_loci.tsv"), list(lead), names(lead))
+test_table <- file.path(run, "haplotype_comparisons.tsv")
+write_rows(test_table, list(list(test_status = "tested_unadjusted")), "test_status")
+expect_error(audit_finemapping(run, gwas, legacy, file.path(temporary, "hidden_tests")))
+unlink(test_table)
+
 # Invalid sources fail before any new output folder is created.
 fresh <- file.path(temporary, "fresh")
 bad <- summary; bad$synthetic <- TRUE; save_summary(bad)
 expect_error(audit_finemapping(run, gwas, legacy, fresh)); assert(!dir.exists(fresh), "Synthetic output was created")
 bad <- summary; bad$haplotype_carrier_tests_performed <- 1L; save_summary(bad)
 expect_error(audit_finemapping(run, gwas, legacy, fresh)); assert(!dir.exists(fresh), "Tested cohort was mislabeled unresolved")
+bad <- summary; bad$haplotype_overall_tests_performed <- 1L; save_summary(bad)
+expect_error(audit_finemapping(run, gwas, legacy, fresh))
+bad <- summary; bad$inputs_stable_during_read <- FALSE; save_summary(bad)
+expect_error(audit_finemapping(run, gwas, legacy, fresh))
 save_summary()
 changed <- gwas_row; changed$Pval <- "1e-8"; write_rows(gwas, list(changed), names(changed))
 expect_error(audit_finemapping(run, gwas, legacy, fresh)); assert(!dir.exists(fresh), "Mismatched GWAS output was created")

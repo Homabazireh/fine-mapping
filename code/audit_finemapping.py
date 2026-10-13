@@ -252,9 +252,17 @@ def audit_finemapping(run_dir: Path, gwas: Path, legacy_dir: Path, out: Path) ->
     if source.get("synthetic") or "demo" in run_dir.name.lower():
         raise ValueError("Synthetic results cannot supply cohort causal evidence")
     leads = read_tsv(run_dir / "lead_loci.tsv")
-    if source.get("haplotype_carrier_tests_performed", 0) or any(
-            int(r.get("selected_markers", "0")) > 0 for r in leads):
+    if any(source.get(key, 0) for key in (
+            "haplotype_carrier_tests_performed", "haplotype_pairwise_tests_performed",
+            "haplotype_overall_tests_performed")):
         raise ValueError("This audit is for unresolved cohorts; evaluate tested haplotypes separately")
+    if source.get("inputs_stable_during_read") is False:
+        raise ValueError("Cohort inputs changed during analysis")
+    for name in ("haplotype_comparisons.tsv", "haplotype_overall_comparisons.tsv"):
+        path = run_dir / name
+        if path.exists() and any(r.get("test_status", "").startswith("tested") for r in read_tsv(path)):
+            raise ValueError("This audit cannot evaluate tested haplotypes")
+    panel_count = sum(int(r.get("selected_markers", "0")) > 0 for r in leads)
     evidence = external_leads(leads, gwas)
     legacy, method = audit_legacy(legacy_dir)
     old_haplotype_script = legacy_dir.parent / "Haplotype_comparison" / "run_one_locus_haplotype.R"
@@ -277,6 +285,7 @@ def audit_finemapping(run_dir: Path, gwas: Path, legacy_dir: Path, out: Path) ->
         "genome_build_declared_in_cohort_run": source.get("genome_build_user_declared", "not_supplied"),
         "cohort_group_counts": source.get("group_counts", {}),
         "cohort_selected_loci": len(leads), "cohort_haplotype_association_tests": 0,
+        "cohort_selected_marker_panels": panel_count,
         "cohort_locus_status_counts": dict(Counter(r["status"] for r in leads)),
         "cohort_high_quality_reference_homozygotes": source.get("scan_counts", {}).get(
             "high_quality_homozygous_reference_genotypes"),
@@ -289,7 +298,7 @@ def audit_finemapping(run_dir: Path, gwas: Path, legacy_dir: Path, out: Path) ->
         "provenance": {"cohort_summary": fingerprint(summary_path), "gwas": fingerprint(gwas),
                        "selected_leads": fingerprint(run_dir / "lead_loci.tsv")},
         "limitations": [
-            "No eligible haplotypes or cohort association tests: no haplotype can be declared different between groups.",
+            "No cohort association tests were performed: descriptive haplotype frequencies, where available, do not establish a group association.",
             "External GWAS leads are associations, not evidence of a diabetes/prediabetes/control difference in this cohort.",
             "Legacy convergence or high PIP cannot resolve unvalidated LD and allele provenance; numeric legacy PIPs are withheld.",
             "Absent reference homozygotes warrants callability investigation; it does not prove every missing genotype is reference.",
@@ -322,7 +331,7 @@ def audit_finemapping(run_dir: Path, gwas: Path, legacy_dir: Path, out: Path) ->
                                ["external_gwas_leads.tsv", "legacy_locus_audit.tsv", "candidate_variants.tsv"]}
     (out / "audit_summary.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     report = ["Variant-evidence audit", "", "No causal variants can be resolved from the validated available evidence.",
-              f"Cohort: {len(leads)} selected loci; 0 eligible haplotype panels; 0 haplotype association tests.",
+              f"Cohort: {len(leads)} selected loci; {panel_count} selected marker panels (descriptive only); 0 haplotype association tests.",
               f"External GWAS: {len(evidence)} selected lead associations, reported separately from cohort evidence.",
               f"Legacy SuSiE: {len(legacy)} loci audited; 0 eligible for causal ranking.",
               "candidate_variants.tsv is intentionally header-only. This means unresolved, not absence of causal variants.",

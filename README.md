@@ -8,6 +8,8 @@ This public repository contains code, tests and methodological documentation onl
 
 Use Python 3.10+ and R 4.3+ with `jsonlite`; install `bcftools` for the R VCF reader. Supply the inputs documented in [data/raw/README.md](data/raw/README.md), or restore the private release according to its `PRIVATE_DATA.md`.
 
+The tested Python 3.14 package versions are pinned in [requirements-analysis.lock.txt](requirements-analysis.lock.txt). Use that file instead of the minimum-version requirements when recreating the same software environment.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-analysis.txt

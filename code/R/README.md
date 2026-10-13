@@ -16,6 +16,9 @@ From the repository root, with the local private inputs restored:
 Rscript code/R/test_analysis.R
 Rscript code/R/test_audit.R
 Rscript code/R/test_haplotype_contrasts.R
+Rscript code/R/test_all_regions.R
+Rscript code/R/test_descriptive_haplotypes.R
+Rscript code/R/test_parallel_analysis.R
 Rscript code/R/compare_haplotypes.R \
   --genome-build GRCh38 --test-associations \
   --out results/cohort_R_new
@@ -88,6 +91,82 @@ show their explicit exclusion reason without drawing an effect at zero.
 `contrast_data.tsv` retains chromosome-copy frequencies as descriptive columns;
 `INTERPRETATION.txt` states the limits of association and causal claims.
 All figures, tables and interpretations stay in the private project.
+
+For separate pictures of every GWAS region, first select every available cluster
+with `--top-loci 0`, then run the independent regional plotter on the completed
+aggregate run:
+
+```bash
+Rscript code/R/compare_haplotypes.R --genome-build GRCh38 \
+  --top-loci 0 --test-associations --no-figure --out results/all_regions_R_new
+Rscript code/R/plot_all_regions.R \
+  --run-dir results/all_regions_R_new --out results/all_regions_R_figures_new
+```
+
+For a large indexed VCF on Unix, use the parallel native R wrapper instead of
+the sequential analysis command. Choose a worker count suited to available CPU
+and memory; overlapping windows stay together and the final association/BH step
+runs once across all regions:
+
+```bash
+Rscript code/R/compare_haplotypes_parallel.R --workers 8 \
+  --genome-build GRCh38 --top-loci 0 --test-associations --no-figure \
+  --out results/all_regions_R_parallel_new
+```
+
+This wrapper uses the same native R QC/phasing/statistical code and requires
+`bcftools` plus an indexed VCF. `test_parallel_analysis.R` checks overlapping
+windows, chromosome boundaries, aggregate tables and scan counts against the
+sequential implementation on synthetic data.
+
+The plotter also accepts the identical aggregate tables from a completed Python
+all-cluster run, avoiding a repeated raw scan when only independent plotting is
+needed. The manifest identifies the source implementation. It refuses a run
+that includes only a subset of available clusters. Each region gets its own
+PNG/PDF, complete plotting table and interpretation, including regions with
+failed leads or no biallelic SNPs. A searchable browser index links every region.
+
+For graphics-only changes, regenerate pictures in parallel from the already
+validated saved plot tables. This checks source hashes and copies all numerical
+tables and interpretations unchanged into a new directory:
+
+```bash
+Rscript code/R/replot_all_regions.R \
+  --run-dir results/all_regions_R_new \
+  --plot-dir results/all_regions_R_figures_new \
+  --out results/all_regions_R_figures_redrawn --workers 8
+```
+
+The six panels show all available PASS biallelic SNPs by group: completeness
+uses all participants in that group, and observed ALT fractions use twice the
+number of called participants. REF plus ALT copies are independently checked
+against that denominator. A site with zero calls has unavailable ALT frequency,
+while its completeness is zero. Medians respect those different denominators.
+Indels and multiallelic records have explicit omission counts and remain in the
+full aggregate variant table. These descriptive pictures do not identify
+haplotype associations or causal variants. Results and interpretations are
+private only.
+
+Eligible panels can still have descriptive observed haplotype frequencies when
+association tests are unavailable. Plot every observed local pattern, with
+three group frequencies and two descriptive disease-minus-control columns:
+
+```bash
+Rscript code/R/plot_descriptive_haplotypes.R \
+  --run-dir results/all_regions_R_new --out results/descriptive_haplotypes_R_new
+```
+
+The plot uses chromosome-copy frequencies with denominator twice the resolved
+participant count, and labels each region's phase-resolution denominators.
+All local haplotype patterns are retained. Gray cells mean unavailable, and
+missing frequencies remain missing in both contrast columns. Separate common
+color scales distinguish frequencies from descriptive differences. No
+confidence intervals, p-values, q-values or significance marks are attached to
+these copy-frequency contrasts. They are conditional on observed, callable,
+phase-resolved participants and can be biased by missingness. The accompanying
+tables report every pattern and the largest absolute descriptive contrast per
+region; that ranking does not identify an associated or causal haplotype.
+These outputs and interpretations are private.
 
 P-values are compared/ranked using complete decimal digit strings and decimal
 exponents, including values smaller than machine precision. Lead clustering uses

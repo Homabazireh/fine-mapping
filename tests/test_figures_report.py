@@ -192,10 +192,10 @@ class FiguresReportTests(unittest.TestCase):
     def test_authoritative_groups_are_settled_while_identifiers_are_pending(self):
         review = {
             "authoritative_group_source": True, "finalized_sample_table": False,
-            "exact_id_matches": 136, "pending_vcf_id_matches": 11,
-            "authoritative_category_counts": {"T2D": 49, "Prediabetes": 47, "NORM": 51},
-            "exact_match_category_counts": {"T2D": 46, "Prediabetes": 43, "NORM": 47},
-            "comparison_counts": {"category_conflict": 88},
+            "exact_id_matches": 58, "pending_vcf_id_matches": 8,
+            "authoritative_category_counts": {"T2D": 23, "Prediabetes": 21, "NORM": 22},
+            "exact_match_category_counts": {"T2D": 20, "Prediabetes": 19, "NORM": 19},
+            "comparison_counts": {"category_conflict": 12},
         }
         manifest = self.report_manifest()
         manifest["figures"] = [{
@@ -208,61 +208,61 @@ class FiguresReportTests(unittest.TestCase):
             "png": str(self.folder / "genotype_qc.png"), "pdf": str(self.folder / "genotype_qc.pdf"),
         }]
         preflight = {
-            "scope": "all_vcf_samples_no_phenotypes", "n_samples": 147, "n_leads": 20,
-            "leads_passing_call_rate": 0, "max_high_quality_called": 126,
-            "max_high_quality_call_rate": 126 / 147, "raw_reference_genotypes": 0,
+            "scope": "all_vcf_samples_no_phenotypes", "n_samples": 66, "n_leads": 7,
+            "leads_passing_call_rate": 0, "max_high_quality_called": 55,
+            "max_high_quality_call_rate": 55 / 66, "raw_reference_genotypes": 0,
             "parameters": {"min_dp": 10, "min_gq": 20, "min_call_rate": 0.9},
-            "group_qc": {"scope": "exact_metadata_id_matches_only", "matched_sample_count": 136,
-                         "unmatched_vcf_count": 11,
-                         "matched_category_counts": {"T2D": 46, "Prediabetes": 43, "NORM": 47}},
+            "group_qc": {"scope": "exact_metadata_id_matches_only", "matched_sample_count": 58,
+                         "unmatched_vcf_count": 8,
+                         "matched_category_counts": {"T2D": 20, "Prediabetes": 19, "NORM": 19}},
         }
         content = reports.report_content(manifest, review, None, False, preflight_summary=preflight)
         self.assertIn("authoritative group source", content)
-        self.assertIn("88 historical group-label conflicts", content)
+        self.assertIn("12 historical group-label conflicts", content)
         self.assertIn("resolved in favour of this table", content)
         self.assertIn("group-source choice is settled", content)
-        self.assertIn("11 VCF identifier matches await confirmation", content)
-        self.assertIn("all 147 VCF samples", content)
+        self.assertIn("8 VCF identifier matches await confirmation", content)
+        self.assertIn("all 66 VCF samples", content)
         self.assertIn("without using participant group labels", content)
         self.assertIn("No checked lead met", content)
-        self.assertIn("126 of 147 (85.7%)", content)
+        self.assertIn("55 of 66 (83.3%)", content)
         self.assertLess(content.index("Supplied participant categories"), content.index("Cohort haplotype results are unavailable"))
         self.assertEqual(content.count("### Supplied participant categories"), 1)
         self.assertNotIn("Final cohort labels remain unresolved", content)
         self.assertNotIn("sample table is finalized", content)
-        self.assertIn("| T2D | Diabetes | 49 | 46 | 3 |", content)
-        self.assertIn("| Prediabetes | Prediabetes | 47 | 43 | 4 |", content)
-        self.assertIn("| NORM | Control | 51 | 47 | 4 |", content)
+        self.assertIn("| T2D | Diabetes | 23 | 20 | 3 |", content)
+        self.assertIn("| Prediabetes | Prediabetes | 21 | 19 | 2 |", content)
+        self.assertIn("| NORM | Control | 22 | 19 | 3 |", content)
         self.assertNotIn("non_diabetes", content)
-        self.assertIn("| Diabetes | T2D | 46 |", content)
-        self.assertIn("| Prediabetes | Prediabetes | 43 |", content)
-        self.assertIn("| Control | NORM | 47 |", content)
-        self.assertIn("11 VCF samples remain unassigned", content)
+        self.assertIn("| Diabetes | T2D | 20 |", content)
+        self.assertIn("| Prediabetes | Prediabetes | 19 |", content)
+        self.assertIn("| Control | NORM | 19 |", content)
+        self.assertIn("8 VCF samples remain unassigned", content)
         self.assertIn("does not finalize an analysis subset", content)
         self.assertEqual(content.count("### Usable lead genotypes by group"), 1)
 
     def test_run_with_no_haplotype_panels_reports_reasons_without_frequency_claims(self):
         output = self.folder / "cohort_run"
         summary = {
-            "group_counts": {"T2D": 49, "Prediabetes": 47, "NORM": 51},
-            "selected_loci": 20, "locus_status_counts": {"lead_below_min_call_rate": 20},
+            "group_counts": {"T2D": 23, "Prediabetes": 21, "NORM": 22},
+            "selected_loci": 7, "locus_status_counts": {"lead_below_min_call_rate": 7},
             "haplotype_carrier_tests_performed": 0,
         }
         content = reports.report_content(self.report_manifest(output, summary), None, output, False)
         self.assertIn("No region yielded an analysable haplotype panel", content)
         self.assertIn("No haplotype frequency estimates were produced", content)
-        self.assertIn("Too few participants had a usable lead genotype at the required quality | 20", content)
+        self.assertIn("Too few participants had a usable lead genotype at the required quality | 7", content)
         self.assertNotIn("Read completeness first, then compare patterns", content)
         self.assertNotIn("Synthetic example", content)
 
     def test_verified_alias_coverage_is_reported_separately_and_not_left_pending(self):
-        counts = {"T2D": 49, "Prediabetes": 48, "Control": 50}
-        exact = {"T2D": 46, "Prediabetes": 45, "Control": 45}
-        aliases = {"T2D": 3, "Prediabetes": 3, "Control": 5}
+        counts = {"T2D": 23, "Prediabetes": 21, "Control": 22}
+        exact = {"T2D": 20, "Prediabetes": 19, "Control": 19}
+        aliases = {"T2D": 3, "Prediabetes": 2, "Control": 3}
         review = {
             "authoritative_group_source": True, "finalized_sample_table": True,
             "metadata_group_column": "Diabetes_Group", "pending_vcf_id_matches": 0,
-            "previous_category_change_count": 92, "category_label_only_change_count": 20,
+            "previous_category_change_count": 12, "category_label_only_change_count": 5,
             "authoritative_category_counts": counts, "exact_match_category_counts": exact,
             "verified_alias_category_counts": aliases, "matched_category_counts": counts,
         }
@@ -273,40 +273,40 @@ class FiguresReportTests(unittest.TestCase):
             "png": str(self.folder / "genotype_qc.png"), "pdf": str(self.folder / "genotype_qc.pdf"),
         }]
         preflight = {
-            "n_samples": 147, "n_leads": 20,
+            "n_samples": 66, "n_leads": 7,
             "group_qc": {
-                "scope": "exact_and_verified_id_matches", "matched_sample_count": 147,
-                "exact_match_sample_count": 136, "verified_alias_sample_count": 11,
+                "scope": "exact_and_verified_id_matches", "matched_sample_count": 66,
+                "exact_match_sample_count": 58, "verified_alias_sample_count": 8,
                 "unmatched_vcf_count": 0, "matched_category_counts": counts,
             },
         }
         content = reports.report_content(manifest, review, None, False, preflight_summary=preflight)
         self.assertIn("`Diabetes_Group` column", content)
-        self.assertIn("92 participant group assignments changed", content)
-        self.assertIn("20 category labels changed in name only", content)
+        self.assertIn("12 participant group assignments changed", content)
+        self.assertIn("5 category labels changed in name only", content)
         self.assertIn("Exact VCF matches | Verified alias matches | Pending ID matches", content)
-        self.assertIn("| T2D | Diabetes | 49 | 46 | 3 | 0 |", content)
-        self.assertIn("| Prediabetes | Prediabetes | 48 | 45 | 3 | 0 |", content)
-        self.assertIn("| Control | Control | 50 | 45 | 5 | 0 |", content)
-        self.assertIn("| Total |  | 147 | 136 | 11 | 0 |", content)
-        self.assertIn("136 exact metadata–VCF ID matches", content)
-        self.assertIn("11 verified alias matches", content)
+        self.assertIn("| T2D | Diabetes | 23 | 20 | 3 | 0 |", content)
+        self.assertIn("| Prediabetes | Prediabetes | 21 | 19 | 2 | 0 |", content)
+        self.assertIn("| Control | Control | 22 | 19 | 3 | 0 |", content)
+        self.assertIn("| Total |  | 66 | 58 | 8 | 0 |", content)
+        self.assertIn("58 exact metadata–VCF ID matches", content)
+        self.assertIn("8 verified alias matches", content)
         self.assertIn("combined exact and verified alias count", content)
         self.assertIn("share of matched participants", content)
         self.assertNotIn("identifier matches still await confirmation", content)
         self.assertNotIn("metadata IDs exactly match the VCF", content)
         self.assertNotIn("share of exact ID matches", content)
 
-        review["matched_category_counts"] = {**counts, "T2D": 48}
+        review["matched_category_counts"] = {**counts, "T2D": 22}
         with self.assertRaisesRegex(ValueError, "disagrees with exact and verified alias counts"):
             reports._participant_section(review)
 
     def test_cohort_overview_is_shown_without_haplotypes_or_saved_preflight(self):
         output = self.folder / "cohort_no_preflight"
         summary = {
-            "group_counts": {"T2D": 49, "Prediabetes": 48, "Control": 50},
-            "selected_loci": 20,
-            "locus_status_counts": {"lead_below_min_call_rate": 19,
+            "group_counts": {"T2D": 23, "Prediabetes": 21, "Control": 22},
+            "selected_loci": 7,
+            "locus_status_counts": {"lead_below_min_call_rate": 6,
                                     "palindromic_lead_orientation_unconfirmed": 1},
             "haplotype_carrier_tests_performed": 0,
             "scan_counts": {"high_quality_homozygous_reference_genotypes": 0},

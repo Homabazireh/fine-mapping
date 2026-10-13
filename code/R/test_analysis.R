@@ -34,6 +34,7 @@ near(decimal_log10(c("0", "1e-500", "2.5E-400", "0.001", ".2", "1")), c(-Inf, -5
 fails(decimal_log10("1.1"), "outside")
 fails(decimal_log10("1.0000000000000001"), "outside")
 assert(identical(decimal_at_most(c("1e-8", "1.0000000000000001e-8", "9.9999999999999999e-9"), "1e-8"), c(TRUE, FALSE, TRUE)), "Exact p-value threshold precision")
+assert(identical(paste("chr1", formatC(120000000, format = "f", digits = 0), "A", "G", sep = ":"), "chr1:120000000:A:G"), "Variant coordinate ID uses scientific notation")
 test <- carrier_test(1, 10, 11, 14)
 near(test$p_fisher_two_sided, 0.0027594561852200836)
 near(test$conditional_odds_ratio_a_vs_b, 0.037209084832381056)

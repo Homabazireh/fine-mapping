@@ -76,6 +76,7 @@ complete_audit_metadata <- function(result, run_dir, gwas, legacy_dir, out) {
 write_audit_report <- function(result, out) {
   jsonlite::write_json(result, file.path(out, "audit_summary.json"), pretty = TRUE, auto_unbox = TRUE, na = "null", null = "null")
   writeLines(c("Independent R variant-evidence audit", "", "No causal variants can be resolved from the validated available evidence.",
+    sprintf("%d selected marker panels (descriptive only); 0 cohort haplotype association tests.", result$cohort_selected_marker_panels),
     sprintf("%d external GWAS leads; %d legacy loci audited; 0 eligible for causal ranking.", result$external_gwas_leads_reported, result$legacy_loci),
     "candidate_variants.tsv is intentionally header-only; this means unresolved, not no causal variants.", "", result$limitations,
     "", "Method sources:", vapply(METHOD_SOURCES, function(s) paste(s$title, s$url, sep = ": "), character(1))), file.path(out, "REPORT.txt"))
@@ -202,8 +203,16 @@ audit_finemapping <- function(run_dir, gwas, legacy_dir, out) {
   source <- jsonlite::fromJSON(file.path(run_dir, "run_summary.json"), simplifyVector = FALSE)
   leads <- read_tsv(file.path(run_dir, "lead_loci.tsv"))
   if (isTRUE(source$synthetic) || grepl("demo", basename(run_dir), ignore.case = TRUE)) stop("Synthetic results cannot supply cohort causal evidence.")
-  if ((source$haplotype_carrier_tests_performed %||% 0) > 0 || any(as.numeric(leads$selected_markers) > 0))
+  test_counts <- c(source$haplotype_carrier_tests_performed %||% 0,
+    source$haplotype_pairwise_tests_performed %||% 0, source$haplotype_overall_tests_performed %||% 0)
+  if (any(test_counts > 0))
     stop("This unresolved-cohort audit cannot evaluate tested haplotypes; independent evidence evaluation is required.")
+  if (identical(source$inputs_stable_during_read, FALSE)) stop("Cohort inputs changed during analysis.")
+  for (name in c("haplotype_comparisons.tsv", "haplotype_overall_comparisons.tsv")) {
+    path <- file.path(run_dir, name)
+    if (file.exists(path) && any(grepl("^tested", read_tsv(path)$test_status)))
+      stop("This audit cannot evaluate tested haplotypes.")
+  }
   external <- external_lead_evidence(leads, gwas)
   legacy <- audit_legacy(legacy_dir)
   dir.create(out, recursive = TRUE, showWarnings = FALSE)
@@ -212,14 +221,15 @@ audit_finemapping <- function(run_dir, gwas, legacy_dir, out) {
   write_rows(file.path(out, "candidate_variants.tsv"), list(), CANDIDATE_FIELDS)
   result <- list(implementation = "independent_R", created_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
     analysis = "aggregate_evidence_audit_not_new_finemapping", synthetic = FALSE, cohort_group_counts = source$group_counts,
-    cohort_selected_loci = nrow(leads), cohort_haplotype_association_tests = 0, cohort_locus_status_counts = counts_list(leads$status),
+    cohort_selected_loci = nrow(leads), cohort_haplotype_association_tests = 0,
+    cohort_selected_marker_panels = sum(as.numeric(leads$selected_markers) > 0), cohort_locus_status_counts = counts_list(leads$status),
     cohort_high_quality_reference_homozygotes = source$scan_counts$high_quality_homozygous_reference_genotypes,
     external_gwas_leads_reported = length(external), resolved_candidate_variants = 0,
     candidate_status = "not_resolvable_from_validated_available_evidence", legacy_loci = length(legacy$rows),
     legacy_status_counts = counts_list(vapply(legacy$rows, `[[`, character(1), "run_status")), legacy_eligible_for_causal_ranking = 0,
     legacy_exclusion_counts = counts_list(unlist(strsplit(vapply(legacy$rows, `[[`, character(1), "exclusion_reasons"), ";", fixed = TRUE))),
     legacy_method = legacy$method,
-    limitations = c("No eligible cohort haplotypes: no group difference or causal variant can be resolved.",
+    limitations = c("No cohort association tests were performed: descriptive haplotype frequencies, where available, do not establish a group association.",
       "GWAS leads are external associations; phenotype coding/effect scale and reference orientation require validation.",
       "Legacy convergence/PIPs cannot resolve unvalidated callability, population matching, or LD/z consistency.",
       "No reference homozygotes is a callability concern; missing genotypes must not be replaced with reference calls.",

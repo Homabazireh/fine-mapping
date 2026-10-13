@@ -82,7 +82,7 @@ verify_parity <- function(python_dir, r_dir, out, python_audit = NULL, r_audit =
     versions = summaries[[2]]$versions, tables = checks,
     numeric_tolerance = list(relative_and_absolute_general = 1e-7,
       reason = "Python formats many numbers to 8 significant figures; R refines conditional OR/CI roots on log odds to 1e-12."),
-    interpretation = "Zero eligible cohort haplotypes gives unavailable group comparisons, not evidence of equality.",
+    interpretation = "Agreement verifies reproduction of the saved analysis. Untested comparisons remain unavailable; descriptive frequency differences do not establish association or causality.",
     scan_scope_note = "R indexed extraction and Python whole-VCF scanning have different total scan counts; selected-window contents must match.")
   jsonlite::write_json(result, out, pretty = TRUE, auto_unbox = TRUE, null = "null", na = "null", digits = 16)
   cat("PASS: ", length(checks), " saved tables agree; aggregate parity summary: ", out, "\n", sep = "")

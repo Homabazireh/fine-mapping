@@ -39,18 +39,19 @@ class PanelCReportTests(unittest.TestCase):
         self.manifest = {
             'files': {'png': 'panel_c.png', 'pdf': 'panel_c.pdf',
                       'svg': 'panel_c.svg', 'data': 'panel_c_data.tsv'},
-            'group_counts': {'Control': 50, 'Prediabetes': 48, 'T2D': 49},
-            'n_leads': 20, 'n_samples': 147, 'min_call_rate': .9,
-            'lead_sites_passing': 0, 'max_high_quality_called': 126,
-            'max_high_quality_call_rate': 126 / 147,
+            # Artificial aggregate fixture; these are not local cohort results.
+            'group_counts': {'Control': 22, 'Prediabetes': 21, 'T2D': 23},
+            'n_leads': 7, 'n_samples': 66, 'min_call_rate': .9,
+            'lead_sites_passing': 0, 'max_high_quality_called': 55,
+            'max_high_quality_call_rate': 55 / 66,
             'parameters': {'min_dp': 10., 'min_gq': 20., 'min_call_rate': .9},
-            'locus_status_counts': {'lead_below_min_call_rate': 19,
+            'locus_status_counts': {'lead_below_min_call_rate': 6,
                                     'palindromic_lead_orientation_unconfirmed': 1},
             'haplotype_carrier_tests_performed': 0,
             'high_quality_homozygous_reference_genotypes': 0,
             'preflight_disabled': True, 'synthetic': False,
             'source_paper_url': 'https://www.nature.com/articles/s41588-024-01719-5/figures/1',
-            'source_run_completed_at_utc': '2026-10-12T17:33:17+00:00', 'genome_build': 'GRCh38',
+            'source_run_completed_at_utc': '2001-01-01T00:00:00+00:00', 'genome_build': 'GRCh38',
             'private_source_path': '/private/participant_data.tsv',
         }
 
@@ -67,12 +68,12 @@ class PanelCReportTests(unittest.TestCase):
         self.assertEqual(parser.images, ['data:image/png;base64,' + base64.b64encode(self.png).decode()])
         self.assertEqual(set(parser.downloads), {*self.manifest['files'].values(),
                                                'panel_c_manifest.json', 'REPORT.txt'})
-        self.assertIn('None of the 20 lead sites meets 90% completeness', html)
-        self.assertIn('49 Diabetes, 48 Prediabetes, 50 Control', html)
-        self.assertIn('126/147', html)
+        self.assertIn('None of the 7 lead sites meets 90% completeness', html)
+        self.assertIn('23 Diabetes, 21 Prediabetes, 22 Control', html)
+        self.assertIn('55/66', html)
         self.assertIn('A genotype is a DNA call at one position.', html)
         self.assertIn('read-depth (DP) and call-quality (GQ)', html)
-        self.assertIn('Labels L0001–L0020 identify regions ranked by GWAS significance', html)
+        self.assertIn('Labels L0001–L0007 identify regions ranked by GWAS significance', html)
         self.assertIn('0 usable haplotype panels', html)
         self.assertIn('0 haplotype association tests', html)
         self.assertIn('The separate preliminary VCF check was skipped.', html)
@@ -88,7 +89,7 @@ class PanelCReportTests(unittest.TestCase):
         self.assertIn('Missing genotypes remain missing.', (relocated / 'REPORT.txt').read_text())
 
     def test_inconsistent_or_synthetic_counts_do_not_produce_a_real_cohort_report(self):
-        for change in [{'synthetic': True}, {'n_samples': 146},
+        for change in [{'synthetic': True}, {'n_samples': 65},
                        {'max_high_quality_call_rate': .5}, {'min_call_rate': .8}]:
             with self.subTest(change=change):
                 with self.assertRaises(ValueError):

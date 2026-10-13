@@ -441,7 +441,7 @@ scan_vcf <- function(args, cohort, loci) {
       counter(counts, "records_in_windows")
       for (j in hits) { counter(loci[[j]]$counts, "records_in_window"); if (pos == loci[[j]]$pos) counter(loci[[j]]$counts, "records_at_lead_position") }
       ref <- f[4]; alts <- strsplit(f[5], ",", fixed = TRUE)[[1]]; alleles <- c(ref, alts)
-      key <- paste(chrom, pos, ref, f[5], sep = ":")
+      key <- paste(chrom, formatC(pos, format = "f", digits = 0), ref, f[5], sep = ":")
       if (exists(key, envir = seen, inherits = FALSE)) stop("Duplicate VCF variant record: ", key)
       seen[[key]] <- TRUE
       kind <- classify_variant(ref, alts, args$max_indel_length)

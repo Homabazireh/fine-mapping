@@ -32,7 +32,7 @@ class HaplotypeContrastTests(unittest.TestCase):
         self.run = self.folder / "run"
         self.run.mkdir()
         self.summary = {"synthetic": True, "inputs_stable_during_read": True,
-                        "group_counts": {"T2D": 49, "Prediabetes": 48, "Control": 50},
+                        "group_counts": {"T2D": 24, "Prediabetes": 23, "Control": 22},
                         "selected_loci": 2,
                         "locus_status_counts": {"lead_below_min_call_rate": 1, "palindromic_lead_orientation_unconfirmed": 1},
                         "completed_at_utc": "2026-10-13T00:00:00+00:00",
@@ -55,7 +55,7 @@ class HaplotypeContrastTests(unittest.TestCase):
         self.summary["locus_status_counts"] = {"analysed": 1, "palindromic_lead_orientation_unconfirmed": 1}
         self.summary["parameters"]["reference_genotypes_confirmed"] = True
         pair = {"locus_id": "L0001", "haplotype_id": "L0001_H001", "group_a": "Control", "group_b": "T2D",
-                "n_resolved_a": 50, "n_resolved_b": 40, "carriers_a": 15, "carriers_b": 20,
+                "n_resolved_a": 20, "n_resolved_b": 20, "carriers_a": 6, "carriers_b": 10,
                 "carrier_frequency_a": .3, "carrier_frequency_b": .5, "test_status": "tested_unadjusted",
                 "carrier_frequency_difference_a_minus_b": -.2, "carrier_difference_CI95_low": -.4,
                 "carrier_difference_CI95_high": -.02, "p_fisher_two_sided": .01,
@@ -86,8 +86,8 @@ class HaplotypeContrastTests(unittest.TestCase):
         row = next(r for r in rows if r["comparison_status"] == "tested")
         self.assertEqual(row["contrast"], "Diabetes vs Control")
         self.assertEqual((row["carrier_frequency_difference"], row["CI95_low"], row["CI95_high"]), (.2, .02, .4))
-        self.assertEqual((row["carriers_case"], row["carriers_control"]), (20, 15))
-        self.assertEqual((row["n_resolved_case"], row["n_resolved_control"]), (40, 50))
+        self.assertEqual((row["carriers_case"], row["carriers_control"]), (10, 6))
+        self.assertEqual((row["n_resolved_case"], row["n_resolved_control"]), (20, 20))
         self.assertEqual(row["q_BH_all_pairwise_tests"], .03)
         self.assertEqual(row["haplotype_frequency_case_descriptive"], .3)
         self.assertNotEqual(row["haplotype_frequency_case_descriptive"], row["carrier_frequency_case"])
@@ -112,7 +112,7 @@ class HaplotypeContrastTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reference-call provenance"):
             load_contrasts(self.run)
         self.summary["parameters"]["reference_genotypes_confirmed"] = True
-        pair["n_resolved_b"] = 20
+        pair["n_resolved_b"] = 10
         self.save([pair], freq)
         with self.assertRaisesRegex(ValueError, "resolution"):
             load_contrasts(self.run)

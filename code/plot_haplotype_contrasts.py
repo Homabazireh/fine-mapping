@@ -207,17 +207,38 @@ def short_reason(reason, parameters):
 
 
 def interpretation(summary, rows):
-    tested = [r for r in rows if r["comparison_status"] == "tested"]
-    observed = [r for r in rows if r["descriptive_carrier_frequency_difference"] is not None]
-    descriptive = [r for r in rows if r["comparison_status"] == "descriptive_only"]
-    missing = [r for r in rows if r["comparison_status"] == "not_estimable"]
+    # A region without an identified haplotype has status placeholders, not
+    # missing comparisons for actual haplotypes. Keep these units separate.
+    haplotype_rows = [r for r in rows if r["haplotype_id"] not in {None, "", "NA", "."}]
+    placeholders = [r for r in rows if r["haplotype_id"] in {None, "", "NA", "."}]
+    excluded = [r for r in placeholders if r["panel_status"] != "analysed"]
+    unresolved = [r for r in placeholders if r["panel_status"] == "analysed"]
+    tested = [r for r in haplotype_rows if r["comparison_status"] == "tested"]
+    observed = [r for r in haplotype_rows if r["descriptive_carrier_frequency_difference"] is not None]
+    descriptive = [r for r in haplotype_rows if r["comparison_status"] == "descriptive_only"]
+    missing = [r for r in haplotype_rows if r["comparison_status"] == "not_estimable"]
     significant = [r for r in tested if r["q_BH_all_pairwise_tests"] < .05]
     regions = len({r["locus_id"] for r in observed})
+    patterns = len({(r["locus_id"], r["haplotype_id"]) for r in observed})
+    scope = len({r["locus_id"] for r in rows})
+    eligible = len({r["locus_id"] for r in rows if r["panel_status"] == "analysed"})
+    source_eligible = summary["locus_status_counts"].get("analysed", 0)
     lines = ["Haplotype contrasts against Control", "",
+             "The source analysis completed. Unavailable inference reflects analysis gates, not a plotting failure.",
              "Requested contrasts: Diabetes vs Control and Prediabetes vs Control.",
-             f"{len(tested)} requested haplotype comparisons were tested; {len(descriptive)} have descriptive observations only; {len(missing)} lack a computable carrier contrast.",
-             f"Observed carrier differences are available in {regions} regions. The complete source analysis selected {summary['selected_loci']} regions.",
+             f"Report scope: {scope} of {summary['selected_loci']} selected regions; {eligible} analysed regions in this report. The complete source has {source_eligible} analysed (panel-eligible) regions.",
+             f"Observed carrier differences are available for {patterns} local haplotypes in {regions} regions.",
+             f"{len(tested)} requested haplotype comparisons were tested; {len(descriptive)} have descriptive observations only; {len(missing)} identified-haplotype comparisons lack a computable carrier contrast.",
+             f"{len(excluded)} excluded-region placeholder rows cover {len({r['locus_id'] for r in excluded})} excluded regions in this report. These rows record requested contrasts without an identified haplotype; they are not haplotype comparisons.",
              "An observed difference describes the resolved participants only; missing or reference-depleted calls can bias both its numerator and denominator."]
+    if unresolved:
+        lines.append(f"{len(unresolved)} further placeholder rows cover {len({r['locus_id'] for r in unresolved})} analysed regions with no resolved haplotypes; these are not identified-haplotype comparisons.")
+    if summary.get("parameters", {}).get("reference_genotypes_confirmed") is False:
+        lines.append("Source parameter reference_genotypes_confirmed=false: reference-call provenance is unconfirmed, so the reference-provenance gate blocks association inference.")
+        lines.append("Confirming reference provenance alone does not establish eligibility; participant-resolution and carrier-count requirements must also pass. The reported reason is the first failing gate; other limitations may also apply.")
+    reference_calls = summary.get("scan_counts", {}).get("high_quality_homozygous_reference_genotypes")
+    if isinstance(reference_calls, int) and not isinstance(reference_calls, bool) and reference_calls >= 0:
+        lines.append(f"Source scan recorded {reference_calls} high-quality homozygous-reference genotypes in the selected windows. This post-QC count does not establish whether reference calls were absent before QC.")
     if not tested:
         lines += ["No statistically supported haplotype association can be established for either requested contrast from this run.",
                   "No candidate causal variant can be localized from these unavailable haplotype comparisons.",
@@ -237,9 +258,17 @@ def interpretation(summary, rows):
             lines.append(f"Largest absolute observed difference for {label}: {r['haplotype_id']}, "
                          f"{r['carriers_case']:.0f}/{r['n_resolved_case']:.0f} versus {r['carriers_control']:.0f}/{r['n_resolved_control']:.0f} carriers, "
                          f"{100*r['descriptive_carrier_frequency_difference']:+.2f} percentage points. This magnitude ranking is descriptive, not evidence of significance or causality.")
-    if descriptive or missing:
-        reasons = Counter(r["reason"] for r in descriptive + missing)
-        lines += ["", "Reasons inference is unavailable (first failing gate; other limitations may also apply):"]
+    if descriptive:
+        reasons = Counter(r["inference_status"] for r in descriptive)
+        lines += ["", "Reasons observed haplotype comparisons remain descriptive-only (comparison counts; first failing gate; other limitations may also apply):"]
+        lines += [f"{n}: {reason}" for reason, n in sorted(reasons.items())]
+    if missing:
+        reasons = Counter(r["reason"] for r in missing)
+        lines += ["", "Reasons identified-haplotype carrier contrasts are unavailable (comparison counts):"]
+        lines += [f"{n}: {reason}" for reason, n in sorted(reasons.items())]
+    if excluded:
+        reasons = Counter(reason for _, reason in {(r["locus_id"], r["reason"]) for r in excluded})
+        lines += ["", "Excluded-region reasons (region counts, not haplotype comparison counts):"]
         lines += [f"{n}: {reason}" for reason, n in sorted(reasons.items())]
     lines += ["", "Observed carrier differences for every available pattern (group minus Control):"]
     for r in observed:
@@ -485,6 +514,7 @@ def export_contrasts(run_dir, out):
     plt.close(figure)
     (out / "INTERPRETATION.txt").write_text(interpretation(summary, rows))
     index = ["# Haplotype carrier contrasts by region", "",
+             f"Source completed analysis: `{run_dir.resolve()}`.", "",
              "Observed differences are descriptive unless explicitly supported by a valid test. Gray/unavailable values are not zero.", "",
              "| Region | Haplotypes observed | Figure or exclusion |", "| --- | ---: | --- |"]
     regional_files = []
@@ -510,6 +540,7 @@ def export_contrasts(run_dir, out):
     if source_hashes != {name: hashlib.sha256((run_dir / name).read_bytes()).hexdigest() for name in SOURCES}:
         raise ValueError("Source analysis changed during contrast rendering")
     manifest = {"private_results": True, "source_run": run_dir.name, "source_sha256": source_hashes,
+                "source_run_path": str(run_dir.resolve()),
                 "comparisons_tested": sum(r["comparison_status"] == "tested" for r in rows),
                 "comparisons_descriptive_only": sum(r["comparison_status"] == "descriptive_only" for r in rows),
                 "comparisons_not_estimable": sum(r["comparison_status"] == "not_estimable" for r in rows),

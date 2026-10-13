@@ -92,6 +92,37 @@ assert(all(vapply(missing_pair, function(r) r$reason == "pairwise_result_unavail
 no_haps <- contrast_rows(lead, comparisons[0, ], frequencies[0, ], summary)
 assert(all(vapply(no_haps, function(r) r$reason == "no_resolved_haplotypes", logical(1))), "Empty resolved panel reason lost")
 
+# Interpretation distinguishes missing actual-haplotype contrasts from region
+# placeholders, while retaining observed zero, unknown data and subset scope.
+mixed_leads <- rbind(lead, leads[2, ], transform(lead, locus_id = "L0003", chrom = "chr3", lead_pos = "300"))
+mixed_summary <- summary_for(mixed_leads, FALSE)
+mixed_summary$scan_counts <- list(high_quality_homozygous_reference_genotypes = 0L)
+mixed <- contrast_rows(mixed_leads, zero, frequencies, mixed_summary)
+before <- serialize(mixed, NULL)
+notes <- contrast_interpretation(mixed, mixed_summary)
+contains <- function(pattern, text = notes) any(grepl(pattern, text, fixed = TRUE))
+assert(contains("0 tested haplotype comparisons; 1 descriptive-only differences; 1 identified-haplotype comparisons"), "Haplotype missingness conflated with placeholders")
+assert(contains("2 excluded-region placeholder rows cover 1 excluded regions"), "Excluded-region placeholder count wrong")
+assert(contains("2 further placeholder rows cover 1 analysed regions with no resolved haplotypes"), "Unresolved analysed regions conflated with exclusions")
+assert(contains("1 local haplotypes in 1 regions"), "Observed haplotype count wrong")
+assert(contains("Report scope: 3 of 3 selected regions; 2 analysed regions in this report") && contains("complete source has 2 analysed (panel-eligible) regions"), "Report or source scope wrong")
+assert(contains("1: pairwise_result_unavailable") && contains("1: palindromic_lead_orientation_unconfirmed") && !contains("2: palindromic_lead_orientation_unconfirmed"), "Reason count units are incorrect")
+assert(contains("source analysis completed") && contains("not a plotting failure"), "Analysis status unclear")
+assert(contains("reference_genotypes_confirmed=false") && contains("Source scan recorded 0 high-quality homozygous-reference genotypes"), "Source provenance evidence missing")
+assert(contains("first failing gate; other limitations may also apply") && contains("participant-resolution and carrier-count requirements must also pass"), "First provenance failure hides other gates")
+assert(contains("does not establish whether reference calls were absent before QC"), "Post-QC counts overinterpreted")
+assert(identical(serialize(mixed, NULL), before), "Interpretation mutated input rows")
+assert(is.na(mixed[[1]]$descriptive_carrier_frequency_difference) && mixed[[2]]$descriptive_carrier_frequency_difference == 0 && all(vapply(mixed[3:6], function(r) is.na(r$haplotype_id), logical(1))), "Missing, zero or unidentified haplotypes changed")
+regional <- Filter(function(r) r$locus_id == "L0001", mixed)
+unknown_summary <- mixed_summary; unknown_summary$parameters$reference_genotypes_confirmed <- NULL
+for (count in list(NULL, NA, "NA", FALSE)) {
+  unknown_summary$scan_counts <- list(high_quality_homozygous_reference_genotypes = count)
+  regional_notes <- contrast_interpretation(regional, unknown_summary)
+  assert(contains("Report scope: 1 of 3 selected regions; 1 analysed regions in this report", regional_notes) && contains("complete source has 2 analysed (panel-eligible) regions", regional_notes), "Regional scope replaced source scope")
+  assert(contains("0 excluded-region placeholder rows cover 0 excluded regions in this report", regional_notes), "Excluded source regions incorrectly assigned to subset")
+  assert(!contains("Source scan recorded", regional_notes) && !contains("reference_genotypes_confirmed=false", regional_notes), "Unknown source provenance became false or zero")
+}
+
 # Duplicate, mismatched and ineligible source records are rejected before drawing.
 fails(contrast_rows(lead, rbind(comparisons, forward[1, ]), frequencies, summary), "Reversed duplicate accepted")
 fails(contrast_rows(lead, comparisons, rbind(frequencies, frequencies[1, ]), summary), "Duplicate frequency accepted")
@@ -126,6 +157,7 @@ fails(export_haplotype_contrasts(run, file.path(folder, "unstable")), "Unstable 
 jsonlite::write_json(summary, file.path(run, "run_summary.json"), auto_unbox = TRUE)
 out <- file.path(folder, "output"); export_haplotype_contrasts(run, out)
 manifest <- jsonlite::fromJSON(file.path(out, "manifest.json"))
+assert(identical(manifest$source_run_path, normalizePath(run)) && any(grepl(normalizePath(run), readLines(file.path(out, "index.md")), fixed = TRUE)), "Full source run path missing")
 assert(length(manifest$source_sha256) == 5L && "COMPLETED.txt" %in% names(manifest$source_sha256), "Completion fingerprint missing")
 assert(manifest$comparison_status_counts$tested == 1 && manifest$comparison_status_counts$descriptive_only == 1, "Manifest statuses disagree")
 assert(file.exists(file.path(out, "regional", "L0001", "haplotype_contrasts.png")), "Regional picture missing")

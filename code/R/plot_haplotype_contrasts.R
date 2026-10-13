@@ -147,17 +147,41 @@ contrast_device <- function(path, type, width, height, dpi = 220) {
 }
 
 contrast_interpretation <- function(rows, summary) {
-  tested <- Filter(function(r) r$comparison_status == "tested", rows)
-  descriptive <- Filter(function(r) r$comparison_status == "descriptive_only", rows)
-  unavailable <- Filter(function(r) r$comparison_status == "not_estimable", rows)
-  observed <- Filter(function(r) !is.na(r$descriptive_carrier_frequency_difference), rows)
+  # Region status placeholders have no identified haplotype and are not
+  # unavailable comparisons for actual haplotypes.
+  has_haplotype <- function(r) !is.na(r$haplotype_id) && !r$haplotype_id %in% c("", "NA", ".")
+  haplotype_rows <- Filter(has_haplotype, rows)
+  placeholders <- Filter(function(r) !has_haplotype(r), rows)
+  excluded <- Filter(function(r) r$panel_status != "analysed", placeholders)
+  unresolved <- Filter(function(r) r$panel_status == "analysed", placeholders)
+  tested <- Filter(function(r) r$comparison_status == "tested", haplotype_rows)
+  descriptive <- Filter(function(r) r$comparison_status == "descriptive_only", haplotype_rows)
+  unavailable <- Filter(function(r) r$comparison_status == "not_estimable", haplotype_rows)
+  observed <- Filter(function(r) !is.na(r$descriptive_carrier_frequency_difference), haplotype_rows)
+  region_count <- function(data) length(unique(vapply(data, `[[`, character(1), "locus_id")))
+  patterns <- length(unique(vapply(observed, function(r) paste(r$locus_id, r$haplotype_id, sep = "\r"), character(1))))
+  eligible <- region_count(Filter(function(r) r$panel_status == "analysed", rows))
+  source_eligible <- summary$locus_status_counts$analysed
+  if (is.null(source_eligible)) source_eligible <- 0L
   lines <- c("Haplotype participant-carrier contrasts against Control", "",
-    sprintf("%d tested comparisons; %d descriptive-only differences; %d unavailable comparisons.", length(tested), length(descriptive), length(unavailable)),
+    "The source analysis completed. Unavailable inference reflects analysis gates, not a plotting failure.",
+    "Requested contrasts: Diabetes vs Control and Prediabetes vs Control.",
+    sprintf("Report scope: %d of %d selected regions; %d analysed regions in this report. The complete source has %d analysed (panel-eligible) regions.", region_count(rows), summary$selected_loci, eligible, source_eligible),
+    sprintf("Observed carrier differences are available for %d local haplotypes in %d regions.", patterns, region_count(observed)),
+    sprintf("%d tested haplotype comparisons; %d descriptive-only differences; %d identified-haplotype comparisons lack a computable carrier contrast.", length(tested), length(descriptive), length(unavailable)),
+    sprintf("%d excluded-region placeholder rows cover %d excluded regions in this report. These rows record requested contrasts without an identified haplotype; they are not haplotype comparisons.", length(excluded), region_count(excluded)),
     "Observed differences equal carriers/resolved participants in Diabetes or Prediabetes minus the corresponding Control fraction.",
     "These are participant-carrier differences, distinct from chromosome-copy haplotype frequencies.",
     "Observed descriptive differences condition on callable, phase-resolved people; missingness and unconfirmed reference-call provenance can bias them.",
     "Descriptive-only differences have no confidence interval, p-value, q-value or significance claim.",
     "Tested rows alone retain the source Newcombe-Wilson 95% intervals and full original pairwise BH correction; this plot performs no inference.")
+  if (length(unresolved)) lines <- c(lines, sprintf("%d further placeholder rows cover %d analysed regions with no resolved haplotypes; these are not identified-haplotype comparisons.", length(unresolved), region_count(unresolved)))
+  if (identical(summary$parameters$reference_genotypes_confirmed, FALSE)) lines <- c(lines,
+    "Source parameter reference_genotypes_confirmed=false: reference-call provenance is unconfirmed, so the reference-provenance gate blocks association inference.",
+    "Confirming reference provenance alone does not establish eligibility; participant-resolution and carrier-count requirements must also pass. The reported reason is the first failing gate; other limitations may also apply.")
+  reference_calls <- summary$scan_counts$high_quality_homozygous_reference_genotypes
+  if (is.numeric(reference_calls) && length(reference_calls) == 1L && !is.na(reference_calls) && is.finite(reference_calls) && reference_calls >= 0 && reference_calls == floor(reference_calls)) lines <- c(lines,
+    sprintf("Source scan recorded %.0f high-quality homozygous-reference genotypes in the selected windows. This post-QC count does not establish whether reference calls were absent before QC.", reference_calls))
   if (!length(tested)) lines <- c(lines, "No inferential haplotype association can be established from this run. Available observed differences are shown without significance claims.")
   for (label in c("Diabetes vs Control", "Prediabetes vs Control")) {
     selected <- Filter(function(r) r$contrast == label, observed)
@@ -168,11 +192,16 @@ contrast_interpretation <- function(rows, summary) {
   }
   if (length(descriptive)) {
     reasons <- table(vapply(descriptive, `[[`, character(1), "inference_status"))
-    lines <- c(lines, "", "Reasons inference remains unavailable:", paste(as.integer(reasons), names(reasons), sep = ": "))
+    lines <- c(lines, "", "Reasons observed haplotype comparisons remain descriptive-only (comparison counts; first failing gate; other limitations may also apply):", paste(as.integer(reasons), names(reasons), sep = ": "))
   }
   if (length(unavailable)) {
     reasons <- table(vapply(unavailable, `[[`, character(1), "reason"))
-    lines <- c(lines, "", "Reasons observed contrasts are unavailable:", paste(as.integer(reasons), names(reasons), sep = ": "))
+    lines <- c(lines, "", "Reasons identified-haplotype carrier contrasts are unavailable (comparison counts):", paste(as.integer(reasons), names(reasons), sep = ": "))
+  }
+  if (length(excluded)) {
+    by_region <- excluded[!duplicated(vapply(excluded, `[[`, character(1), "locus_id"))]
+    reasons <- table(vapply(by_region, `[[`, character(1), "reason"))
+    lines <- c(lines, "", "Excluded-region reasons (region counts, not haplotype comparison counts):", paste(as.integer(reasons), names(reasons), sep = ": "))
   }
   c(lines, "", "Unavailable means missing, not zero difference or equal groups.",
     "Causal variants remain unresolved; observed contrasts and external GWAS associations do not establish causality.",
@@ -322,6 +351,7 @@ export_haplotype_contrasts <- function(run_dir, out) {
     writeLines(contrast_interpretation(regional, summary), file.path(folder, "INTERPRETATION.txt"))
   }
   index <- c("# Haplotype contrasts: every selected region", "",
+    sprintf("Source completed analysis: `%s`.", normalizePath(run_dir)), "",
     "Observed participant-carrier differences are descriptive unless a row is explicitly tested. All absent estimates retain their exclusion reason.", "",
     "[Overview](haplotype_contrasts.png) | [Full aggregate table](contrast_data.tsv) | [Interpretation](INTERPRETATION.txt)", "",
     "| Region | Panel status | Observed disease-control contrasts | Regional picture | Interpretation |",
@@ -337,6 +367,7 @@ export_haplotype_contrasts <- function(run_dir, out) {
   if (!identical(before, contrast_sha256(paths))) stop("Source analysis changed during contrast plotting; discard these outputs.")
   statuses <- table(factor(vapply(rows, `[[`, character(1), "comparison_status"), levels = c("tested", "descriptive_only", "not_estimable")))
   manifest <- list(private_results = TRUE, implementation = "independent_R", source_run = basename(normalizePath(run_dir)),
+    source_run_path = normalizePath(run_dir),
     source_implementation = summary$implementation %||% "Python", source_sha256 = as.list(before),
     inputs_stable_during_plotting = TRUE, synthetic = isTRUE(summary$synthetic), R_version = R.version.string,
     jsonlite_version = as.character(packageVersion("jsonlite")), rows = length(rows), selected_regions = summary$selected_loci,

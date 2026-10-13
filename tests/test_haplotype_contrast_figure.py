@@ -130,6 +130,53 @@ class HaplotypeContrastTests(unittest.TestCase):
         self.assertIsNone(rows[1]["descriptive_carrier_frequency_difference"])
         self.assertEqual(rows[1]["comparison_status"], "not_estimable")
 
+    def test_interpretation_separates_haplotype_missingness_from_region_placeholders(self):
+        pair, freq = self.descriptive_fixture()
+        pair.update(carriers_a=10, carrier_frequency_a=.5)
+        self.leads.append(dict(locus_id="L0003", chrom="chr3", lead_pos="300", status="analysed"))
+        self.summary.update(selected_loci=3, locus_status_counts={"analysed": 2, "palindromic_lead_orientation_unconfirmed": 1},
+                            scan_counts={"high_quality_homozygous_reference_genotypes": 0})
+        self.save([pair], freq)
+        summary, rows = load_contrasts(self.run)
+        before = json.dumps(rows, sort_keys=True)
+        text = interpretation(summary, rows)
+        self.assertIn("0 requested haplotype comparisons were tested; 1 have descriptive observations only; 1 identified-haplotype comparisons", text)
+        self.assertIn("2 excluded-region placeholder rows cover 1 excluded regions", text)
+        self.assertIn("2 further placeholder rows cover 1 analysed regions with no resolved haplotypes", text)
+        self.assertIn("1 local haplotypes in 1 regions", text)
+        self.assertIn("Report scope: 3 of 3 selected regions; 2 analysed regions in this report", text)
+        self.assertIn("complete source has 2 analysed (panel-eligible) regions", text)
+        self.assertIn("1: pairwise_result_unavailable", text)
+        self.assertIn("1: palindromic_lead_orientation_unconfirmed", text)
+        self.assertNotIn("2: palindromic_lead_orientation_unconfirmed", text)
+        self.assertIn("source analysis completed", text)
+        self.assertIn("not a plotting failure", text)
+        self.assertIn("reference_genotypes_confirmed=false", text)
+        self.assertIn("first failing gate; other limitations may also apply", text)
+        self.assertIn("participant-resolution and carrier-count requirements must also pass", text)
+        self.assertIn("Source scan recorded 0 high-quality homozygous-reference genotypes", text)
+        self.assertIn("does not establish whether reference calls were absent before QC", text)
+        self.assertEqual(json.dumps(rows, sort_keys=True), before)
+        self.assertEqual(rows[0]["descriptive_carrier_frequency_difference"], 0)
+        self.assertIsNone(rows[1]["descriptive_carrier_frequency_difference"])
+        self.assertTrue(all(row["haplotype_id"] is None for row in rows[2:]))
+
+    def test_regional_interpretation_retains_full_source_scope_and_unknown_provenance(self):
+        pair, freq = self.descriptive_fixture()
+        self.save([pair], freq)
+        summary, rows = load_contrasts(self.run)
+        regional = [r for r in rows if r["locus_id"] == "L0001"]
+        summary["parameters"].pop("reference_genotypes_confirmed")
+        for count in (None, "NA", False):
+            with self.subTest(reference_scan=count):
+                summary["scan_counts"] = {"high_quality_homozygous_reference_genotypes": count}
+                text = interpretation(summary, regional)
+                self.assertIn("Report scope: 1 of 2 selected regions; 1 analysed regions in this report", text)
+                self.assertIn("0 excluded-region placeholder rows cover 0 excluded regions in this report", text)
+                self.assertIn("1 identified-haplotype comparisons lack a computable carrier contrast", text)
+                self.assertNotIn("Source scan recorded", text)
+                self.assertNotIn("reference_genotypes_confirmed=false", text)
+
     def test_untested_counts_frequencies_and_inference_fields_are_validated(self):
         pair, freq = self.descriptive_fixture()
         for update, expected in [({"carriers_b": 21}, "counts"),
@@ -207,6 +254,8 @@ class HaplotypeContrastTests(unittest.TestCase):
         self.assertTrue(manifest["private_results"])
         self.assertEqual(manifest["comparisons_tested"], 0)
         self.assertEqual(manifest["comparisons_not_estimable"], 4)
+        self.assertEqual(manifest["source_run_path"], str(self.run.resolve()))
+        self.assertIn(str(self.run.resolve()), (out / "index.md").read_text())
         for suffix in ["png", "pdf", "svg"]:
             self.assertTrue((out / f"haplotype_contrasts.{suffix}").is_file())
         with (out / "contrast_data.tsv").open() as handle:

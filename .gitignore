@@ -53,5 +53,12 @@ archive/
 # Publisher PDFs are local reading copies; public notes link to the publisher.
 literature_review/**/*.pdf
 
-# Reviewed, aggregate-only report published with the standalone figure.
-!docs/figures/report.html
+# Figures and embedded-figure reports are private-only.
+*.png
+*.pdf
+*.svg
+*.jpg
+*.jpeg
+*.gif
+*.webp
+docs/figures/*.html

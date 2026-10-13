@@ -36,9 +36,9 @@ layout so that the example relative paths resolve. A public checkout includes
 the code and aggregate publication, but requires local data for a cohort rerun.
 
 The completed 13 October run is under
-`results/haplotype_comparison_20261013/`. The publication is copied to
-`docs/figures/`; its tables have no participant identifiers or individual
-genotypes. Local detailed run files must not be staged into the public repo.
+`results/haplotype_comparison_20261013/`. The complete publication is shared in private `fine-mapping-2`.
+Only reviewed aggregate tables remain in this public repository’s `docs/figures/`;
+they contain no participant identifiers or individual genotypes. Local detailed run files must not be staged into the public repo.
 
 ## Statistical interpretation
 

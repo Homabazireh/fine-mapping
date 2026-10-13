@@ -1,10 +1,12 @@
-# Panel C and three-group haplotype results
+# Aggregate haplotype results; figures are private
 
-![Panel C: usable lead genotypes in Diabetes, Prediabetes and Control](panel_c.png)
+All saved figures, including panel C, are available in the private
+[Fine mapping 2 figure catalog](https://github.com/Homabazireh/fine-mapping-2/tree/main/all_figures)
+and its [single-figure report folder](https://github.com/Homabazireh/fine-mapping-2/tree/main/docs/figures).
+Figure files and the embedded-figure HTML report have been removed from this
+public branch. The aggregate result tables below remain available.
 
-[PNG, 600 dpi](panel_c.png) · [Vector PDF](panel_c.pdf) · [Editable SVG](panel_c.svg)
-
-[Full one-figure report](report.html) · [Plain-text results](REPORT.txt) · [Reproduction instructions](../haplotype_comparison.md)
+[Plain-text results](REPORT.txt) · [Reproduction instructions](../haplotype_comparison.md)
 
 ## Result — 13 October 2026
 
@@ -49,10 +51,10 @@ External GWAS signals alone cannot establish group differences in this cohort.
 Use the [Python workflow](../haplotype_comparison.md) or the independent
 [R implementation](../../code/R/README.md). The completed local publication
 comes from `results/haplotype_comparison_20261013/publication_verified/`.
-The repository contains only aggregate exports; detailed participant files
+This public folder contains aggregate tables; detailed participant files
 remain local or in the separate private data repository.
 
-Only panel C appears in this report. The PNG is 7,800 × 6,240 pixels; PDF and
+Only panel C appears in the private focused report. The PNG is 7,800 × 6,240 pixels; PDF and
 SVG contain the same figure. Layout inspiration:
 [Figueroa et al. (2024), Figure 1](https://www.nature.com/articles/s41588-024-01719-5/figures/1).
 This cohort figure is not a replication of the paper's founder-haplotype study.

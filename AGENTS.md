@@ -18,7 +18,7 @@
 
 ## Publishing and data
 
-- `Homabazireh/fine-mapping` is public: publish code, documentation and reviewed aggregate results only. Raw genotypes, participant tables, aliases and credentials must remain excluded.
+- `Homabazireh/fine-mapping` is public: publish code, documentation and reviewed aggregate tables only. The user explicitly requested removal of all public figure files and embedded-figure reports; keep these private in `fine-mapping-2`. Raw genotypes, participant tables, aliases and credentials must remain excluded.
 - The user authorized a separate private repository, `Homabazireh/fine-mapping-2`, for project data. Verify that destination remains private before any data upload. Do not add collaborators or change visibility.
 - Large project data belong in checked, checksum-verified private release archives. Keep credentials, Git internals, installed environments and caches out of archives. Include a file manifest and restoration instructions.
 - Inspect staged files and the destination before pushing. Do not force-push or overwrite other work.

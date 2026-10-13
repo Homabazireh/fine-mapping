@@ -7,7 +7,7 @@ compare Diabetes, Prediabetes and Control using shared marker panels, overall
 three-group carrier tests, pairwise effects with 95% confidence intervals, and
 separate Benjamini–Hochberg corrections for overall and pairwise tests.
 See the [reproduction instructions](docs/haplotype_comparison.md),
-[single panel C and results](docs/figures/README.md), and
+[aggregate results](docs/figures/README.md), and
 [agent instructions](AGENTS.md).
 
 **The current data do not resolve which haplotypes differ.** All 20 selected
@@ -26,17 +26,17 @@ your VCF, and compares local DNA patterns (**haplotypes**) between participant
 groups. A haplotype is a set of variant alleles carried together on one
 chromosome.
 
-## View the figures on GitHub
+## Figures and private data
 
-Open [panel c and its report](docs/figures/README.md) to view the standalone
-paper-inspired figure and download its 600-dpi PNG or vector PDF/SVG. It uses the
-real cohort's aggregate results: 49 Diabetes, 48 Prediabetes and 50 Control
-participants. The figure shows available lead genotypes; no region produced a
-usable haplotype panel.
+All saved figures and complete analysis results are available in the private
+[Fine mapping 2 repository](https://github.com/Homabazireh/fine-mapping-2).
+Its `all_figures/` catalog provides browsable copies, and its private release
+contains all project inputs and detailed results with restoration instructions.
 
-The [literature review](literature_review/README.md) explains the connection to
-Figueroa et al. (2024). The [GitHub update guide](docs/github.md) describes how
-to commit and push future changes.
+This public repository retains the full Python and R code, documentation and
+[reviewed aggregate result tables](docs/figures/README.md). Figure files and
+reports containing embedded figures have been removed from the current public
+branch at the user's request. Do not republish them here.
 
 ## Start from a fresh checkout
 
@@ -54,7 +54,7 @@ skipped when those inputs are unavailable. The demo creates generated inputs
 under `data/intermediate/demo/` and a completed run under `results/demo/`.
 
 The repository contains code, settings, report source, literature notes and the
-selected aggregate figure exports in `docs/figures/`. Raw data, participant
+reviewed aggregate tables in `docs/figures/`. Raw data, participant
 tables, review files, analysis results, rendered reports, archived originals and
 local tool installations are ignored by Git and are **not included in a clone**.
 
@@ -112,8 +112,7 @@ Genotype completeness and the completed cohort outcome appear in separate
 sections.
 
 Full reports, working figure directories and participant data stay local and
-are ignored by Git. Selected aggregate figure copies are published separately
-in `docs/figures/`.
+are ignored by Git. All figure copies are shared only through the private `fine-mapping-2` repository.
 
 ## Build figures and the report
 
